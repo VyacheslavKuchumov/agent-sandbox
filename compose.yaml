@@ -27,6 +27,22 @@ networks:
     internal: true
     ipam:
       config: [{ subnet: 10.88.5.0/24 }]
+  assistant:
+    name: sbx-assistant
+    internal: true
+    ipam:
+      config: [{ subnet: 10.88.4.0/24 }]
+  mailgw:
+    name: sbx-mailgw
+    internal: true
+    ipam:
+      config: [{ subnet: 10.88.6.0/24 }]
+  # Broker upstream for agents whose own network has no vpn (assistant).
+  keysnet:
+    name: sbx-keys
+    internal: true
+    ipam:
+      config: [{ subnet: 10.88.9.0/24 }]
   # Monitoring stack. Not internal (Docker cannot publish ports from internal
   # networks); agents are not on it. Grafana/Loki phone-home is disabled.
   monitor:
@@ -38,6 +54,8 @@ volumes:
   coder_home:
   infra_home:
   admin_home:
+  assistant_home:
+  mailgw_state:
   loki_data:
   grafana_data:
 
@@ -69,8 +87,9 @@ services:
       - /tmp:size=8m
     secrets: [vless_url, dashboard_secret, host_wg]
     environment:
-      AGENT_INBOUNDS: coder=10.88.1.2,infra=10.88.2.2,admin=10.88.3.2,web=10.88.5.2
+      AGENT_INBOUNDS: coder=10.88.1.2,infra=10.88.2.2,admin=10.88.3.2,web=10.88.5.2,mailgw=10.88.6.2,keys=10.88.9.2
       WEB_ONLY_PORTS: web
+      DOMAIN_ALLOW: mailgw=googleapis.com;keys=api.anthropic.com
       CONTROLLER: 10.88.0.2:9090
       HOST_PROXY: 10.88.0.2:7891   # host apps / browser (PAC), no kill switch
       HOST_WG_PORT: 51820          # host full tunnel via NetworkManager (10.88.0.2:51820)
@@ -83,6 +102,8 @@ services:
       infra: { ipv4_address: 10.88.2.2 }
       admin: { ipv4_address: 10.88.3.2 }
       web: { ipv4_address: 10.88.5.2 }
+      mailgw: { ipv4_address: 10.88.6.2 }
+      keysnet: { ipv4_address: 10.88.9.2 }
     mem_limit: 256m
     pids_limit: 128
 
@@ -111,6 +132,8 @@ services:
       infra: { ipv4_address: 10.88.2.3 }
       admin: { ipv4_address: 10.88.3.3 }
       web: { ipv4_address: 10.88.5.3 }
+      assistant: { ipv4_address: 10.88.4.3 }
+      keysnet: { ipv4_address: 10.88.9.3 }
     mem_limit: 256m
     pids_limit: 128
 
@@ -279,6 +302,68 @@ services:
           recursive: readonly
     networks:
       admin: { ipv4_address: 10.88.3.11 }
+    mem_limit: 2g
+    cpus: 2
+    pids_limit: 512
+
+  # Gmail / Calendar gateway (MCP). Holds the Google tokens; the assistant only
+  # gets narrow tools. Its own egress may reach googleapis.com only.
+  mailgw:
+    build: ./mailgw
+    image: agent-sandbox/mailgw:local
+    container_name: sbx-mailgw
+    profiles: [assistant]
+    restart: unless-stopped
+    depends_on: [vpn]
+    read_only: true
+    user: "1000:1000"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    environment:
+      HTTPS_PROXY: http://10.88.6.2:7890
+      HTTP_PROXY: http://10.88.6.2:7890
+      MAILGW_LISTEN: 10.88.4.4:8000
+      MAILGW_PUBLIC_HOST: 10.88.4.4
+    volumes:
+      - ./secrets/keys/assistant:/run/google:ro
+      - mailgw_state:/var/lib/mailgw
+    networks:
+      assistant: { ipv4_address: 10.88.4.4 }
+      mailgw: { ipv4_address: 10.88.6.4 }
+    mem_limit: 256m
+    pids_limit: 128
+
+  # Type 4: mail/calendar assistant. No internet (no vpn on its network), no
+  # secrets, no shell/file/web tools — only the mailgw MCP tools.
+  assistant:
+    image: agent-sandbox/agent-base:local
+    container_name: sbx-agent-assistant
+    profiles: [assistant]
+    restart: unless-stopped
+    depends_on: [keys, mailgw]
+    read_only: true
+    user: "1000:1000"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /tmp:size=256m
+    environment:
+      HTTP_PROXY: http://10.88.4.3:8080
+      HTTPS_PROXY: http://10.88.4.3:8080
+      http_proxy: http://10.88.4.3:8080
+      https_proxy: http://10.88.4.3:8080
+      NO_PROXY: localhost,127.0.0.1,10.88.4.4
+      no_proxy: localhost,127.0.0.1,10.88.4.4
+      CLAUDE_CODE_OAUTH_TOKEN: sk-ant-oat01-sbx-placeholder
+      SBX_AGENT: assistant
+    volumes:
+      - assistant_home:/home/agent
+      - ./agents/assistant/managed-settings.json:/etc/claude-code/managed-settings.json:ro
+      - ./agents/assistant/managed-mcp.json:/etc/claude-code/managed-mcp.json:ro
+    working_dir: /home/agent
+    networks:
+      assistant: { ipv4_address: 10.88.4.11 }
     mem_limit: 2g
     cpus: 2
     pids_limit: 512

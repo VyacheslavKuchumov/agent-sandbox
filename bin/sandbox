@@ -4,8 +4,8 @@ set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT"
 
-AGENTS="coder infra admin web"
-SERVICES="anthropic github codex-auth.json"
+AGENTS="coder infra admin web assistant"
+SERVICES="anthropic github codex-auth.json google.json"
 
 usage() {
   cat <<'EOF'
@@ -26,6 +26,9 @@ usage: bin/sandbox <command> [args]
   login <agent> claude       Claude subscription: one-off `claude setup-token`, token → broker
   login <agent> codex        ChatGPT subscription: one-off `codex login --device-auth`, tokens → broker,
                              the agent gets derived fakes
+  login assistant google     Gmail + Calendar OAuth for mailgw (needs secrets/google-client.json)
+  approvals [list|show|approve|deny] [id]
+                             review what the assistant wants to send / invite / delete
   key <agent> <service>      store a token for the broker (e.g. `key coder github` = PAT)
   key-rm <agent> <service>   delete a stored token
   keys                       list configured tokens (names only)
@@ -43,7 +46,7 @@ usage: bin/sandbox <command> [args]
   apply                      review infra-agent changes (git diff), then rebuild + restart
 
  Checks
-  test                       kill switch + isolation checks
+  test                       kill switch, isolation, routing policy, broker and mailgw tests
   dashboard                  live connections dashboard (zashboard) URL and secret
   grafana                    history dashboard (Grafana) URL and admin password
 EOF
@@ -121,7 +124,7 @@ cmd_status() {
 }
 
 cmd_keys() {
-  printf '%-10s' "agent"; for s in $SERVICES; do printf '%-12s' "${s%-auth.json}"; done; echo
+  printf '%-10s' "agent"; for s in $SERVICES; do s=${s%-auth.json}; printf '%-12s' "${s%.json}"; done; echo
   for a in $AGENTS; do
     printf '%-10s' "$a"
     for s in $SERVICES; do [ -s "secrets/keys/$a/$s" ] && printf '%-12s' "✓" || printf '%-12s' "-"; done
@@ -186,6 +189,16 @@ cmd_login() {
             [ -f $home/.codex/config.toml ] || echo 'cli_auth_credentials_store = \"file\"' > $home/.codex/config.toml"
       docker compose restart keys >/dev/null
       echo "codex login saved for $agent (real tokens: secrets/keys/$agent/codex-auth.json, broker restarted)" ;;
+    google)
+      [ "$agent" = assistant ] || die "google login is for the assistant only"
+      [ -s secrets/google-client.json ] || die "put your Google OAuth *Desktop* client JSON into secrets/google-client.json first (see REPORT.md)"
+      umask 077; mkdir -p secrets/keys/assistant
+      docker run --rm -it --network sbx-mailgw -u "$(id -u):$(id -g)" \
+        -e HTTPS_PROXY=http://10.88.6.2:7890 -e HTTP_PROXY=http://10.88.6.2:7890 \
+        -v "$ROOT/secrets/google-client.json:/client.json:ro" -v "$ROOT/secrets/keys/assistant:/out" \
+        --entrypoint python agent-sandbox/mailgw:local -m mailgw.login /client.json /out/google.json
+      docker compose --profile assistant restart mailgw >/dev/null 2>&1 || true
+      echo "Google login saved (secrets/keys/assistant/google.json, readable by mailgw only)" ;;
     *) die "unknown tool: $2" ;;
   esac
 }
@@ -291,12 +304,18 @@ case "${1:-help}" in
   update)    shift; cmd_update "$@" ;;
   rebuild)   cmd_rebuild ;;
   apply)     cmd_apply ;;
-  test)      exec tests/killswitch.sh ;;
+  test)      rc=0
+             tests/killswitch.sh || rc=1
+             tests/routing.sh || rc=1
+             tests/broker.sh | tail -1 || rc=1
+             tests/mailgw.sh | tail -1 || rc=1
+             exit $rc ;;
   dashboard) echo "URL:    http://127.0.0.1:9090/ui/  (backend: http://127.0.0.1:9090)"
              echo "Secret: $(cat secrets/dashboard_secret)" ;;
   grafana)   echo "URL:      http://127.0.0.1:3300/  (dashboard «Запросы»)"
              echo "Login:    admin / $(cat secrets/grafana_admin_password)" ;;
   host-vpn)  shift; cmd_host_vpn "$@" ;;
+  approvals) shift; docker exec -it sbx-mailgw python -m mailgw.approve "${@:-list}" ;;
   help|-h|--help) usage ;;
   *)         usage; exit 1 ;;
 esac

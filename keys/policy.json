@@ -57,6 +57,13 @@
       "services": [
         "anthropic"
       ]
+    },
+    "assistant": {
+      "listen": "10.88.4.3",
+      "upstream": "http://10.88.9.2:7890",
+      "services": [
+        "anthropic"
+      ]
     }
   }
 }

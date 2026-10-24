@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": ["mcp__mail"],
+    "deny": ["Bash", "Read", "Edit", "Write", "NotebookEdit", "Glob", "Grep", "WebFetch", "WebSearch"],
+    "disableBypassPermissionsMode": "disable"
+  }
+}

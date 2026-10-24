@@ -88,5 +88,20 @@ if running sbx-agent-admin; then
   dx 'curl -s --max-time 5 --noproxy "*" https://1.1.1.1' && bad "admin has a direct route" || ok "admin: direct route blocked"
 fi
 
+if running sbx-agent-assistant; then
+  echo "[assistant] agent container"
+  sx() { docker exec sbx-agent-assistant sh -c "$*" >/dev/null 2>&1; }
+  sx "$tok_scan" && bad "real-looking token inside assistant!" || ok "no real tokens inside assistant"
+  sx 'curl -s --max-time 5 --noproxy "*" https://1.1.1.1' && bad "assistant has a direct route" || ok "assistant: direct route blocked"
+  sx 'curl -sf --max-time 8 https://example.com' && bad "assistant reached the web via broker!" || ok "assistant: no web (broker upstream allows only api.anthropic.com)"
+  sx 'curl -s --noproxy "*" --max-time 3 http://10.88.1.2:7890' && bad "assistant reaches other agent networks!" || ok "assistant: other networks unreachable"
+  sx 'test -r /etc/claude-code/managed-mcp.json' && ok "assistant: managed MCP config present" || bad "managed MCP config missing"
+fi
+if running sbx-mailgw; then
+  echo "[mailgw] gateway container"
+  docker exec sbx-mailgw sh -c 'ls /run/google' >/dev/null 2>&1 && ok "mailgw: Google creds mount present" || bad "mailgw: creds mount missing"
+  docker exec sbx-agent-assistant sh -c 'test -e /run/google' >/dev/null 2>&1 && bad "assistant sees Google creds!" || ok "assistant: Google creds not mounted"
+fi
+
 echo "passed: $PASS, failed: $FAIL"
 [ "$FAIL" -eq 0 ]

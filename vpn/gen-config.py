@@ -131,12 +131,27 @@ def vless_outbound(url):
     return out, server_ip, u.port
 
 
-def web_only_rules():
-    """Inbounds listed in WEB_ONLY_PORTS may only reach ports 80/443."""
+def only_for(inbounds, allowed):
+    """Reject traffic from `inbounds` that does not match `allowed`.
+
+    A logical AND is required: `invert` on a plain rule would negate the inbound
+    match too and reject every other agent's traffic.
+    """
+    return {"type": "logical", "mode": "and", "action": "reject",
+            "rules": [{"inbound": inbounds}, {**allowed, "invert": True}]}
+
+
+def restriction_rules():
+    rules = []
+    # WEB_ONLY_PORTS=web → in-web may only reach ports 80/443.
     tags = [f"in-{n}" for n in filter(None, os.environ.get("WEB_ONLY_PORTS", "").split(","))]
-    if not tags:
-        return []
-    return [{"inbound": tags, "port": [80, 443], "invert": True, "action": "reject"}]
+    if tags:
+        rules.append(only_for(tags, {"port": [80, 443]}))
+    # DOMAIN_ALLOW="mailgw=googleapis.com,google.com;keys=api.anthropic.com" → domain allow-lists.
+    for item in filter(None, os.environ.get("DOMAIN_ALLOW", "").split(";")):
+        name, domains = item.split("=", 1)
+        rules.append(only_for([f"in-{name}"], {"domain_suffix": domains.split(",")}))
+    return rules
 
 
 def host_endpoints():
@@ -189,7 +204,7 @@ def main():
                 {"action": "sniff"},
                 {"protocol": "dns", "action": "hijack-dns"},
                 {"ip_version": 6, "action": "reject"},
-                *web_only_rules(),
+                *restriction_rules(),
             ],
             "final": "proxy",
         },
