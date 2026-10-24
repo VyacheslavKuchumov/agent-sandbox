@@ -5,7 +5,7 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT"
 
 AGENTS="coder infra admin web"
-SERVICES="anthropic github"
+SERVICES="anthropic github codex-auth.json"
 
 usage() {
   cat <<'EOF'
@@ -24,6 +24,8 @@ usage: bin/sandbox <command> [args]
 
  Auth (tokens never enter agent containers)
   login <agent> claude       Claude subscription: one-off `claude setup-token`, token → broker
+  login <agent> codex        ChatGPT subscription: one-off `codex login --device-auth`, tokens → broker,
+                             the agent gets derived fakes
   key <agent> <service>      store a token for the broker (e.g. `key coder github` = PAT)
   key-rm <agent> <service>   delete a stored token
   keys                       list configured tokens (names only)
@@ -109,7 +111,7 @@ cmd_status() {
 }
 
 cmd_keys() {
-  printf '%-10s' "agent"; for s in $SERVICES; do printf '%-12s' "$s"; done; echo
+  printf '%-10s' "agent"; for s in $SERVICES; do printf '%-12s' "${s%-auth.json}"; done; echo
   for a in $AGENTS; do
     printf '%-10s' "$a"
     for s in $SERVICES; do [ -s "secrets/keys/$a/$s" ] && printf '%-12s' "✓" || printf '%-12s' "-"; done
@@ -154,7 +156,26 @@ cmd_login() {
       [ -n "$tok" ] || die "no token"
       save_secret "$agent" anthropic "$tok" ;;
     codex)
-      die "codex via subscription is not wired into the broker yet (ChatGPT tokens refresh themselves) — next step" ;;
+      [ "$agent" = web ] && die "web runs claude only"
+      case $agent in admin) home=/home/admin; uid=1500 ;; *) home=/home/agent; uid=1000 ;; esac
+      tmp=$(mktemp -d -p "${XDG_RUNTIME_DIR:-/tmp}" sbx-codex.XXXXXX)
+      trap 'rm -rf "$tmp"' EXIT INT TERM
+      echo "Starting a one-off container for 'codex login --device-auth' (only via the vpn)."
+      echo "Open the shown URL in your browser and enter the code."
+      docker run --rm -it --network "sbx-$agent" -u "$(id -u):$(id -g)" \
+        -e HTTPS_PROXY="http://10.88.$n.2:7890" -e HTTP_PROXY="http://10.88.$n.2:7890" \
+        -e CODEX_HOME=/codexhome -v "$tmp:/codexhome" \
+        --entrypoint codex agent-sandbox/agent-base:local login --device-auth
+      [ -s "$tmp/auth.json" ] || die "login did not produce auth.json"
+      umask 077; mkdir -p "secrets/keys/$agent"
+      cp "$tmp/auth.json" "secrets/keys/$agent/codex-auth.json"
+      # The agent gets derived fakes only; the broker maps them back to the real tokens.
+      python3 -I keys/codexauth.py fake < "$tmp/auth.json" | \
+        docker run --rm -i -u "$uid:$uid" -v "agent-sandbox_${agent}_home:$home" --entrypoint sh \
+          agent-sandbox/agent-base:local -c "mkdir -p $home/.codex && cat > $home/.codex/auth.json && chmod 600 $home/.codex/auth.json
+            [ -f $home/.codex/config.toml ] || echo 'cli_auth_credentials_store = \"file\"' > $home/.codex/config.toml"
+      docker compose restart keys >/dev/null
+      echo "codex login saved for $agent (real tokens: secrets/keys/$agent/codex-auth.json, broker restarted)" ;;
     *) die "unknown tool: $2" ;;
   esac
 }

@@ -89,7 +89,8 @@ services:
     environment:
       SBX_CA_DIR: /run/keys/ca
     volumes:
-      - ./secrets/keys:/run/keys:ro
+      # rw: the broker persists refreshed codex tokens
+      - ./secrets/keys:/run/keys
     networks:
       coder: { ipv4_address: 10.88.1.3 }
       infra: { ipv4_address: 10.88.2.3 }
