@@ -25,10 +25,12 @@ if [ "$(docker inspect -f '{{.State.Running}}' "$c" 2>/dev/null)" != true ]; the
   "$ROOT/bin/sandbox" up "$type" >/dev/null
 fi
 
-# Open the agent in the same folder as the pane when it is inside ~/Projects.
-case $PWD in
-  "$PROJECTS_DIR"|"$PROJECTS_DIR"/*) wd=$PWD ;;
-  *) wd=$PROJECTS_DIR ;;
+# Working dir: coder opens in the pane's folder when it is inside ~/Projects.
+case $type in
+  coder) case $PWD in "$PROJECTS_DIR"|"$PROJECTS_DIR"/*) wd=$PWD ;; *) wd=$PROJECTS_DIR ;; esac ;;
+  infra) wd=$SANDBOX_DIR ;;
+  admin) wd=/proposals ;;
+  *)     wd=/ ;;
 esac
 
 case $tool in

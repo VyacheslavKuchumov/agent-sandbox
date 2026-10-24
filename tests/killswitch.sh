@@ -59,5 +59,34 @@ if docker inspect -f '{{.State.Running}}' sbx-agent-coder 2>/dev/null | grep -q 
   ax 'curl -s --max-time 5 --noproxy "*" https://1.1.1.1' && bad "coder has a direct route" || ok "coder: direct route blocked"
 fi
 
+running() { docker inspect -f '{{.State.Running}}' "$1" 2>/dev/null | grep -q true; }
+tok_scan='grep -rIohE "sk-ant-oat01-[A-Za-z0-9_-]{40,}|gh[po]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]+" /home /etc /tmp 2>/dev/null | grep -qv sbxplaceholder'
+
+if running sbx-agent-infra; then
+  echo "[infra] agent container"
+  ix() { docker exec sbx-agent-infra sh -c "$*" >/dev/null 2>&1; }
+  ix "$tok_scan" && bad "real-looking token inside infra!" || ok "no real tokens inside infra"
+  [ "$(docker exec sbx-agent-infra sh -c 'ls -A $PWD/secrets | wc -l')" = 0 ] && ok "secrets/ hidden" || bad "secrets/ visible"
+  ix 'docker ps' && ok "docker ps via socket-proxy" || bad "docker ps fails"
+  ix 'docker run --rm alpine true' && bad "docker run allowed!" || ok "docker run denied"
+  ix 'docker exec sbx-vpn true' && bad "docker exec allowed!" || ok "docker exec denied"
+  ix 'curl -s --max-time 5 --noproxy "*" https://1.1.1.1' && bad "infra has a direct route" || ok "infra: direct route blocked"
+fi
+
+if running sbx-agent-admin; then
+  echo "[admin] agent container"
+  dx() { docker exec sbx-agent-admin sh -c "$*" >/dev/null 2>&1; }
+  dx "$tok_scan" && bad "real-looking token inside admin!" || ok "no real tokens inside admin"
+  dx 'test -r /host/etc/os-release' && ok "reads host /etc" || bad "cannot read host /etc"
+  dx 'touch /host/tmp/sbx-test' && bad "host fs writable!" || ok "host fs read-only (incl. submounts)"
+  dx 'ls /host/home/kuchumov' && bad "host home readable!" || ok "host home not readable"
+  dx 'cat /host/etc/shadow' && bad "shadow readable!" || ok "root-only files not readable"
+  dx 'kill -0 1' && bad "can signal host processes!" || ok "cannot signal host processes"
+  dx 'curl -s --unix-socket /host/run/docker.sock http://x/version' && bad "raw docker.sock reachable!" || ok "raw docker.sock denied"
+  dx 'docker restart sbx-vpn' && bad "docker POST allowed!" || ok "docker read-only"
+  [ "$(docker exec sbx-agent-admin sh -c 'find / -xdev -perm /6000 -type f 2>/dev/null | wc -l')" = 0 ] && ok "no setuid binaries" || bad "setuid binaries present"
+  dx 'curl -s --max-time 5 --noproxy "*" https://1.1.1.1' && bad "admin has a direct route" || ok "admin: direct route blocked"
+fi
+
 echo "passed: $PASS, failed: $FAIL"
 [ "$FAIL" -eq 0 ]

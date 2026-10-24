@@ -32,6 +32,21 @@
       "services": [
         "anthropic"
       ]
+    },
+    "infra": {
+      "listen": "10.88.2.3",
+      "upstream": "http://10.88.2.2:7890",
+      "services": [
+        "anthropic",
+        "github"
+      ]
+    },
+    "admin": {
+      "listen": "10.88.3.3",
+      "upstream": "http://10.88.3.2:7890",
+      "services": [
+        "anthropic"
+      ]
     }
   }
 }

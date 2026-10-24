@@ -30,6 +30,8 @@ networks:
 
 volumes:
   coder_home:
+  infra_home:
+  admin_home:
 
 secrets:
   vless_url:
@@ -90,6 +92,8 @@ services:
       - ./secrets/keys:/run/keys:ro
     networks:
       coder: { ipv4_address: 10.88.1.3 }
+      infra: { ipv4_address: 10.88.2.3 }
+      admin: { ipv4_address: 10.88.3.3 }
       web: { ipv4_address: 10.88.5.3 }
     mem_limit: 256m
     pids_limit: 128
@@ -155,5 +159,110 @@ services:
     networks:
       web: { ipv4_address: 10.88.5.11 }
     mem_limit: 4g
+    cpus: 2
+    pids_limit: 512
+
+  # Docker API for infra: GET only. (Restarts need POST=1 in socket-proxy, which
+  # would also open containers/create — so restarts go through `bin/sandbox apply`.)
+  dockerproxy-infra:
+    image: tecnativa/docker-socket-proxy:v0.5.0
+    container_name: sbx-dockerproxy-infra
+    profiles: [infra]
+    restart: unless-stopped
+    environment: { CONTAINERS: 1, IMAGES: 1, INFO: 1, NETWORKS: 1, VERSION: 1, PING: 1, POST: 0 }
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      infra: { ipv4_address: 10.88.2.4 }
+    mem_limit: 64m
+
+  # Docker API for admin: GET only.
+  dockerproxy-admin:
+    image: tecnativa/docker-socket-proxy:v0.5.0
+    container_name: sbx-dockerproxy-admin
+    profiles: [admin]
+    restart: unless-stopped
+    environment: { CONTAINERS: 1, IMAGES: 1, INFO: 1, NETWORKS: 1, VERSION: 1, PING: 1, POST: 0 }
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      admin: { ipv4_address: 10.88.3.4 }
+    mem_limit: 64m
+
+  # Type 2: edits this repo (never secrets/), sees containers and their logs.
+  # Changes take effect only when you run `bin/sandbox apply`.
+  infra:
+    image: agent-sandbox/agent-base:local
+    container_name: sbx-agent-infra
+    profiles: [infra]
+    restart: unless-stopped
+    depends_on: [keys, dockerproxy-infra]
+    read_only: true
+    user: "1000:1000"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /tmp:exec,size=1g
+      - ${SANDBOX_DIR}/secrets:uid=1000,gid=1000,mode=0700,size=1m
+    environment:
+      HTTP_PROXY: http://10.88.2.3:8080
+      HTTPS_PROXY: http://10.88.2.3:8080
+      http_proxy: http://10.88.2.3:8080
+      https_proxy: http://10.88.2.3:8080
+      NO_PROXY: localhost,127.0.0.1,10.88.2.4
+      no_proxy: localhost,127.0.0.1,10.88.2.4
+      DOCKER_HOST: tcp://10.88.2.4:2375
+      CLAUDE_CODE_OAUTH_TOKEN: sk-ant-oat01-sbx-placeholder
+      GH_TOKEN: ghp_sbxplaceholder0000000000000000000000
+      SBX_AGENT: infra
+    volumes:
+      - infra_home:/home/agent
+      - ${SANDBOX_DIR}:${SANDBOX_DIR}
+    working_dir: ${SANDBOX_DIR}
+    networks:
+      infra: { ipv4_address: 10.88.2.11 }
+    mem_limit: 4g
+    cpus: 2
+    pids_limit: 1024
+
+  # Type 3: sysadmin observer. Host / read-only at /host, writes only proposals/.
+  admin:
+    build: ./agents/admin
+    image: agent-sandbox/agent-admin:local
+    container_name: sbx-agent-admin
+    profiles: [admin]
+    restart: unless-stopped
+    depends_on: [keys, dockerproxy-admin]
+    read_only: true
+    user: "1500:1500"
+    group_add: ["${HOST_JOURNAL_GID}", "${HOST_ADM_GID}", "${HOST_USER_GID}"]
+    pid: host
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /tmp:size=512m
+    environment:
+      HTTP_PROXY: http://10.88.3.3:8080
+      HTTPS_PROXY: http://10.88.3.3:8080
+      http_proxy: http://10.88.3.3:8080
+      https_proxy: http://10.88.3.3:8080
+      NO_PROXY: localhost,127.0.0.1,10.88.3.4
+      no_proxy: localhost,127.0.0.1,10.88.3.4
+      DOCKER_HOST: tcp://10.88.3.4:2375
+      CLAUDE_CODE_OAUTH_TOKEN: sk-ant-oat01-sbx-placeholder
+      SBX_AGENT: admin
+    volumes:
+      - admin_home:/home/admin
+      - ./proposals:/proposals
+      - type: bind
+        source: /
+        target: /host
+        read_only: true
+        bind:
+          propagation: rslave
+          recursive: readonly
+    networks:
+      admin: { ipv4_address: 10.88.3.11 }
+    mem_limit: 2g
     cpus: 2
     pids_limit: 512

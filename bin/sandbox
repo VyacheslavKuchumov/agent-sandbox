@@ -4,7 +4,7 @@ set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT"
 
-AGENTS="coder web"          # agent types implemented so far
+AGENTS="coder infra admin web"
 SERVICES="anthropic github"
 
 usage() {
@@ -32,6 +32,7 @@ usage: bin/sandbox <command> [args]
   update [--check] [--min-age N]  bump claude/codex/sing-box/... to stable releases ≥N days old
                                   (default 14), rebuild images, restart running containers
   rebuild                    rebuild all images without changing versions
+  apply                      review infra-agent changes (git diff), then rebuild + restart
 
  Checks
   test                       kill switch + isolation checks
@@ -55,6 +56,12 @@ cmd_init() {
     echo "created broker CA (secrets/keys/ca)"
   fi
   for a in $AGENTS; do mkdir -p "secrets/keys/$a"; done
+  # Host group ids for agent-admin (journal / logs read access).
+  sed -i -e "s/^HOST_JOURNAL_GID=.*/HOST_JOURNAL_GID=$(getent group systemd-journal | cut -d: -f3)/" \
+         -e "s/^HOST_ADM_GID=.*/HOST_ADM_GID=$(getent group adm | cut -d: -f3)/" .env
+  grep -q '^HOST_USER_GID=' .env || echo "HOST_USER_GID=$(id -g)" >> .env
+  mkdir -p proposals web-outbox
+  chmod 2775 proposals   # agent-admin writes here via your group
   chmod -R go-rwx secrets
 }
 
@@ -63,6 +70,22 @@ cmd_rebuild() {
   cp secrets/keys/ca/mitmproxy-ca-cert.pem agents/base/sbx-ca.crt
   docker compose build vpn keys
   docker build -t agent-sandbox/agent-base:local agents/base
+  docker compose --profile admin build admin
+}
+
+cmd_apply() {
+  [ -d .git ] || die "not a git repository"
+  echo "== uncommitted changes:"; git status --short
+  echo "== commits not yet applied (since tag 'applied'):"
+  git log --oneline applied..HEAD 2>/dev/null || git log --oneline -10
+  echo "== diff of security-relevant keys (volumes, privileged, cap_add, network_mode, pid, devices, user):"
+  git diff applied -- compose.yaml 2>/dev/null | grep -E '^[+-].*(volumes|source:|privileged|cap_add|network_mode|pid:|devices|user:|docker.sock|internal:|ports:)' || echo "  (none)"
+  printf 'full diff? [y/N] '; read -r a; [ "$a" = y ] && git diff applied 2>/dev/null | less
+  printf 'apply (rebuild images, recreate running containers)? [y/N] '; read -r a; [ "$a" = y ] || die "aborted"
+  was=$(running_services)
+  cmd_rebuild
+  docker compose --profile "*" up -d --remove-orphans $was
+  git tag -f applied >/dev/null && echo "applied; tagged HEAD as 'applied'"
 }
 
 running_services() {
@@ -175,6 +198,7 @@ case "${1:-help}" in
   keys)      cmd_keys ;;
   update)    shift; cmd_update "$@" ;;
   rebuild)   cmd_rebuild ;;
+  apply)     cmd_apply ;;
   test)      exec tests/killswitch.sh ;;
   dashboard) echo "URL:    http://127.0.0.1:9090/ui/  (backend: http://127.0.0.1:9090)"
              echo "Secret: $(cat secrets/dashboard_secret)" ;;

@@ -1,0 +1,3 @@
+#!/bin/sh
+# Query the host's pacman database read-only, e.g. `pacman-host -Q linux`.
+exec pacman --config /etc/pacman-host.conf "$@"
