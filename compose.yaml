@@ -27,17 +27,27 @@ networks:
     internal: true
     ipam:
       config: [{ subnet: 10.88.5.0/24 }]
+  # Monitoring stack. Not internal (Docker cannot publish ports from internal
+  # networks); agents are not on it. Grafana/Loki phone-home is disabled.
+  monitor:
+    name: sbx-monitor
+    ipam:
+      config: [{ subnet: 10.88.7.0/24 }]
 
 volumes:
   coder_home:
   infra_home:
   admin_home:
+  loki_data:
+  grafana_data:
 
 secrets:
   vless_url:
     file: ./secrets/vless.url
   dashboard_secret:
     file: ./secrets/dashboard_secret
+  grafana_admin_password:
+    file: ./secrets/grafana_admin_password
 
 services:
   vpn:
@@ -267,3 +277,72 @@ services:
     mem_limit: 2g
     cpus: 2
     pids_limit: 512
+
+  # ---- monitoring (profile: monitor) ----
+  dockerproxy-monitor:
+    image: tecnativa/docker-socket-proxy:v0.5.0
+    container_name: sbx-dockerproxy-monitor
+    profiles: [monitor]
+    restart: unless-stopped
+    environment: { CONTAINERS: 1, EVENTS: 1, INFO: 1, VERSION: 1, PING: 1, POST: 0 }
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      monitor: { ipv4_address: 10.88.7.4 }
+    mem_limit: 64m
+
+  loki:
+    image: grafana/loki:3.7.8
+    container_name: sbx-loki
+    profiles: [monitor]
+    restart: unless-stopped
+    command: ["-config.file=/etc/loki/sandbox.yaml"]
+    read_only: true
+    volumes:
+      - ./monitor/loki.yaml:/etc/loki/sandbox.yaml:ro
+      - loki_data:/loki
+    networks:
+      monitor: { ipv4_address: 10.88.7.2 }
+    mem_limit: 512m
+
+  vector:
+    image: timberio/vector:0.59.0-alpine
+    container_name: sbx-vector
+    profiles: [monitor]
+    restart: unless-stopped
+    depends_on: [loki, dockerproxy-monitor]
+    command: ["--config", "/etc/vector/sandbox.yaml"]
+    read_only: true
+    tmpfs: [/var/lib/vector, /tmp]
+    volumes:
+      - ./monitor/vector.yaml:/etc/vector/sandbox.yaml:ro
+    ports:
+      - 127.0.0.1:5140:5140/udp
+    networks:
+      monitor: { ipv4_address: 10.88.7.5 }
+    mem_limit: 256m
+
+  grafana:
+    image: grafana/grafana:13.2.3
+    container_name: sbx-grafana
+    profiles: [monitor]
+    restart: unless-stopped
+    depends_on: [loki]
+    secrets: [grafana_admin_password]
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_admin_password
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+      GF_PLUGINS_PLUGIN_ADMIN_ENABLED: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/requests.json
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitor/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitor/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - 127.0.0.1:3300:3000
+    networks:
+      monitor: { ipv4_address: 10.88.7.3 }
+    mem_limit: 512m

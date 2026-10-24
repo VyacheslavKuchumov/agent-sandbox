@@ -1,0 +1,7 @@
+apiVersion: 1
+providers:
+  - name: sandbox
+    folder: Agent Sandbox
+    type: file
+    options:
+      path: /var/lib/grafana/dashboards

@@ -1,0 +1,80 @@
+# Collects: sing-box connections (sbx-vpn), broker API calls (sbx-keys),
+# mail gateway actions (sbx-mailgw), host syslog on :5140/udp (OpenSnitch,
+# sandbox-host-watch). Ships everything to Loki.
+sources:
+  containers:
+    type: docker_logs
+    docker_host: http://10.88.7.4:2375
+    include_containers: [sbx-vpn, sbx-keys, sbx-mailgw]
+  host_syslog:
+    type: syslog
+    mode: udp
+    address: 0.0.0.0:5140
+
+transforms:
+  parsed:
+    type: remap
+    inputs: [containers]
+    source: |
+      line = replace(string!(.message), r'\x1b\[[0-9;]*m', "")
+      .container = .container_name
+      if .container == "sbx-vpn" {
+        .source = "vpn"
+        m, err = parse_regex(line, r'inbound/[a-z]+\[in-(?P<agent>[a-z0-9-]+)\]: inbound connection to (?P<dest>\S+)')
+        if err == null {
+          .agent = m.agent
+          .dest = m.dest
+          .dest_host = replace(string!(m.dest), r':\d+$', "")
+          .event = "connection"
+        } else {
+          .event = "log"
+          .agent = "vpn"
+        }
+      } else if .container == "sbx-keys" {
+        .source = "keys"
+        j, err = parse_json(line)
+        if err == null && is_object(j) {
+          . = merge(., object!(j))
+          .event = "api_call"
+        } else {
+          .event = "log"
+          .agent = "keys"
+        }
+      } else {
+        .source = "mailgw"
+        j, err = parse_json(line)
+        if err == null && is_object(j) { . = merge(., object!(j)) }
+        .event = .event || "log"
+      }
+      .message = line
+      del(.label)
+      del(.container_name)
+      del(.container_id)
+      del(.image)
+      del(.stream)
+      del(.source_type)
+      del(.container_created_at)
+
+  host:
+    type: remap
+    inputs: [host_syslog]
+    source: |
+      .source = "host"
+      .app = .appname || "unknown"
+      .agent = "host"
+      j, err = parse_json(string!(.message))
+      if err == null && is_object(j) { . = merge(., object!(j)) }
+      del(.source_type)
+
+sinks:
+  loki:
+    type: loki
+    inputs: [parsed, host]
+    endpoint: http://10.88.7.2:3100
+    encoding:
+      codec: json
+    labels:
+      source: "{{ source }}"
+      agent: "{{ agent }}"
+      event: "{{ event }}"
+    out_of_order_action: accept

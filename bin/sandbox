@@ -16,7 +16,7 @@ usage: bin/sandbox <command> [args]
   vless                      paste your vless:// key, restart vpn and run tests
 
  Run
-  up [agent...]              start vpn + broker (+ given agents, e.g. `up coder`)
+  up [agent...|monitor]      start vpn + broker (+ given agents, e.g. `up coder infra monitor`)
   down                       stop everything
   restart [service...]       restart services (default: vpn keys)
   status                     containers, health, which keys are configured
@@ -38,7 +38,8 @@ usage: bin/sandbox <command> [args]
 
  Checks
   test                       kill switch + isolation checks
-  dashboard                  dashboard URL and secret
+  dashboard                  live connections dashboard (zashboard) URL and secret
+  grafana                    history dashboard (Grafana) URL and admin password
 EOF
 }
 
@@ -49,6 +50,7 @@ net_of() { case $1 in coder) echo 1;; infra) echo 2;; admin) echo 3;; assistant)
 cmd_init() {
   umask 077
   mkdir -p secrets/keys/ca
+  [ -s secrets/grafana_admin_password ] || { head -c 18 /dev/urandom | base64 | tr -d '/+=' > secrets/grafana_admin_password; echo "created secrets/grafana_admin_password"; }
   [ -s secrets/dashboard_secret ] || { head -c 24 /dev/urandom | base64 | tr -d '/+=' > secrets/dashboard_secret; echo "created secrets/dashboard_secret"; }
   [ -s secrets/vless.url ] || { cp secrets/vless.url.example secrets/vless.url; echo "created secrets/vless.url — run: bin/sandbox vless"; }
   if [ ! -s secrets/keys/ca/mitmproxy-ca.pem ]; then
@@ -99,6 +101,7 @@ cmd_up() {
   docker image inspect agent-sandbox/agent-base:local >/dev/null 2>&1 || cmd_rebuild
   docker compose up -d vpn keys
   for a in "$@"; do
+    [ "$a" = monitor ] && { docker compose --profile monitor up -d dockerproxy-monitor loki vector grafana; continue; }
     is_agent "$a" || die "unknown agent: $a (available: $AGENTS)"
     [ "$a" = web ] && { echo "web is per-session: use bin/agent web"; continue; }
     docker compose --profile "$a" up -d "$a"
@@ -223,6 +226,8 @@ case "${1:-help}" in
   test)      exec tests/killswitch.sh ;;
   dashboard) echo "URL:    http://127.0.0.1:9090/ui/  (backend: http://127.0.0.1:9090)"
              echo "Secret: $(cat secrets/dashboard_secret)" ;;
+  grafana)   echo "URL:      http://127.0.0.1:3300/  (dashboard «Запросы»)"
+             echo "Login:    admin / $(cat secrets/grafana_admin_password)" ;;
   help|-h|--help) usage ;;
   *)         usage; exit 1 ;;
 esac
