@@ -30,6 +30,7 @@ case $type in
   coder) case $PWD in "$PROJECTS_DIR"|"$PROJECTS_DIR"/*) wd=$PWD ;; *) wd=$PROJECTS_DIR ;; esac ;;
   infra) wd=$SANDBOX_DIR ;;
   admin) wd=/proposals ;;
+  cad)   wd=/models ;;
   *)     wd=/ ;;
 esac
 

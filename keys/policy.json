@@ -64,6 +64,14 @@
       "services": [
         "anthropic"
       ]
+    },
+    "cad": {
+      "listen": "10.88.8.3",
+      "upstream": "http://10.88.8.2:7890",
+      "services": [
+        "anthropic",
+        "codex"
+      ]
     }
   }
 }

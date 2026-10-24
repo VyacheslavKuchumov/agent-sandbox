@@ -8,6 +8,7 @@ RUN apt-get update \
       ca-certificates git curl less procps jq unzip tini \
       ripgrep fd-find python3 python3-venv build-essential \
       docker-cli docker-compose \
+      gh golang-go cargo lua5.4 cmake pkg-config sqlite3 python3-pip \
  && rm -rf /var/lib/apt/lists/*
 
 RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} @openai/codex@${CODEX_VERSION} \

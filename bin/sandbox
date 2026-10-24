@@ -4,8 +4,8 @@ set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT"
 
-AGENTS="coder infra admin web assistant"
-SERVICES="anthropic github codex-auth.json google.json"
+AGENTS="coder infra admin web assistant cad"
+SERVICES="anthropic github codex-auth.json google.json google-drive.json"
 
 usage() {
   cat <<'EOF'
@@ -27,6 +27,7 @@ usage: bin/sandbox <command> [args]
   login <agent> codex        ChatGPT subscription: one-off `codex login --device-auth`, tokens → broker,
                              the agent gets derived fakes
   login assistant google     Gmail + Calendar OAuth for mailgw (needs secrets/google-client.json)
+  login cad google           Google Drive (drive.file scope) for drivegw
   approvals [list|show|approve|deny] [id]
                              review what the assistant wants to send / invite / delete
   key <agent> <service>      store a token for the broker (e.g. `key coder github` = PAT)
@@ -54,7 +55,7 @@ EOF
 
 die() { echo "sandbox: $*" >&2; exit 1; }
 is_agent() { for a in $AGENTS; do [ "$a" = "$1" ] && return 0; done; return 1; }
-net_of() { case $1 in coder) echo 1;; infra) echo 2;; admin) echo 3;; assistant) echo 4;; web) echo 5;; esac; }
+net_of() { case $1 in coder) echo 1;; infra) echo 2;; admin) echo 3;; assistant) echo 4;; web) echo 5;; cad) echo 8;; esac; }
 
 cmd_init() {
   umask 077
@@ -85,6 +86,8 @@ cmd_rebuild() {
   docker compose build vpn keys
   docker build -t agent-sandbox/agent-base:local agents/base
   docker compose --profile admin build admin
+  docker build -t agent-sandbox/mailgw:local mailgw
+  docker compose --profile cad build cad
 }
 
 cmd_apply() {
@@ -190,15 +193,19 @@ cmd_login() {
       docker compose restart keys >/dev/null
       echo "codex login saved for $agent (real tokens: secrets/keys/$agent/codex-auth.json, broker restarted)" ;;
     google)
-      [ "$agent" = assistant ] || die "google login is for the assistant only"
+      case $agent in
+        assistant) out=google.json; scopes=mail; gw=mailgw ;;
+        cad)       out=google-drive.json; scopes=drive; gw=drivegw ;;
+        *) die "google login is for assistant (Gmail+Calendar) or cad (Drive)" ;;
+      esac
       [ -s secrets/google-client.json ] || die "put your Google OAuth *Desktop* client JSON into secrets/google-client.json first (see REPORT.md)"
-      umask 077; mkdir -p secrets/keys/assistant
+      umask 077; mkdir -p "secrets/keys/$agent"
       docker run --rm -it --network sbx-mailgw -u "$(id -u):$(id -g)" \
         -e HTTPS_PROXY=http://10.88.6.2:7890 -e HTTP_PROXY=http://10.88.6.2:7890 \
-        -v "$ROOT/secrets/google-client.json:/client.json:ro" -v "$ROOT/secrets/keys/assistant:/out" \
-        --entrypoint python agent-sandbox/mailgw:local -m mailgw.login /client.json /out/google.json
-      docker compose --profile assistant restart mailgw >/dev/null 2>&1 || true
-      echo "Google login saved (secrets/keys/assistant/google.json, readable by mailgw only)" ;;
+        -v "$ROOT/secrets/google-client.json:/client.json:ro" -v "$ROOT/secrets/keys/$agent:/out" \
+        --entrypoint python agent-sandbox/mailgw:local -m mailgw.login /client.json "/out/$out" "$scopes"
+      docker compose --profile "$agent" restart "$gw" >/dev/null 2>&1 || true
+      echo "Google login saved (secrets/keys/$agent/$out, readable by $gw only)" ;;
     *) die "unknown tool: $2" ;;
   esac
 }
@@ -208,6 +215,7 @@ cmd_update() {
   while [ $# -gt 0 ]; do
     case $1 in --check) mode=check;; --min-age) age=$2; shift;; *) die "unknown option $1";; esac; shift
   done
+  command -v gh >/dev/null 2>&1 && GITHUB_TOKEN=$(gh auth token 2>/dev/null || true) && export GITHUB_TOKEN
   python3 -I bin/versions.py "$mode" --min-age "$age"
   [ "$mode" = bump ] || return 0
   was=$(running_services)
@@ -308,7 +316,7 @@ case "${1:-help}" in
              tests/killswitch.sh || rc=1
              tests/routing.sh || rc=1
              tests/broker.sh | tail -1 || rc=1
-             tests/mailgw.sh | tail -1 || rc=1
+             tests/mailgw.sh | grep -E "^(mailgw|drive):|✗" || rc=1
              exit $rc ;;
   dashboard) echo "URL:    http://127.0.0.1:9090/ui/  (backend: http://127.0.0.1:9090)"
              echo "Secret: $(cat secrets/dashboard_secret)" ;;

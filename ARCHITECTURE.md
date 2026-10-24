@@ -5,9 +5,10 @@
 VLESS-VPN с kill switch. **Секретов (токенов, ключей) внутри агентов нет вообще.**
 Управление агентами идёт через herdr на хосте.
 
-Статус: ✅ VPN + kill switch + дашборд, ✅ брокер `keys`, ✅ agent-coder, ✅ agent-web,
-✅ хелперы `bin/sandbox` / `bin/agent`, всё проверено `bin/sandbox test` (24/24).
-Остальное — план. Сквозная проверка с реальным VLESS-ключом и логином ещё не делалась. Известные ограничения — в [LIMITATIONS.md](LIMITATIONS.md).
+Статус: ✅ всё из §9 реализовано: агенты coder, infra, admin, web, assistant, cad, брокер (Claude и Codex по
+подписке), шлюзы mailgw и drivegw, мониторинг, подключение хоста. `bin/sandbox test` проходит.
+Сквозная проверка с реальным VLESS-ключом, логинами и Google ещё не делалась: см. REPORT.md.
+Развёртывание на Windows/WSL: [WINDOWS.md](WINDOWS.md). Известные ограничения — в [LIMITATIONS.md](LIMITATIONS.md).
 
 ---
 
@@ -17,7 +18,7 @@ VLESS-VPN с kill switch. **Секретов (токенов, ключей) вн
  Хост (Arch, docker, herdr)
  ┌────────────────────────────────────────────────────────────────────────────────┐
  │ herdr: панели  bin/agent coder | infra | admin | assistant                     │
- │ браузер: 127.0.0.1:9090/ui (соединения) · 127.0.0.1:8090 (одобрение почты)     │
+ │ браузер: 127.0.0.1:9090/ui (соединения) · 127.0.0.1:3300 (Grafana)            │
  │                                                                                │
  │  sbx-coder      sbx-infra      sbx-admin        sbx-assistant                  │
  │  10.88.1.0/24   10.88.2.0/24   10.88.3.0/24     10.88.4.0/24                   │
@@ -88,46 +89,48 @@ IPv6 и `ip_forward` выключены, лимиты памяти и проце
 Задача: агент, захваченный prompt injection, **не может украсть** ни токен Claude/Codex,
 ни GitHub-токен, ни API-ключи. Их просто нет в его контейнере.
 
-### Как работает
+### Как работает (реализовано: mitmproxy, `keys/inject.py`)
 ```
-agent ──http://10.88.N.3:8080/anthropic/v1/messages  (Authorization: Bearer sbx-placeholder)
-        └▶ keys: определяет агента по входящей сети/IP → берёт ЕГО токен → подменяет заголовок
-              └▶ через vpn (in-keys) → https://api.anthropic.com/v1/messages
+agent (HTTPS_PROXY=http://10.88.N.3:8080, в env только заглушки, CA брокера в trust store)
+  └▶ keys: отдельный mitmdump на каждого агента. Расшифровывает ТОЛЬКО хосты из policy.json
+     (api.anthropic.com, github.com, chatgpt.com, auth.openai.com, …), подменяет заглушку
+     на ЕГО токен в заголовке Authorization / x-api-key. Остальной трафик идёт TLS-туннелем без расшифровки
+        └▶ upstream: вход sing-box этого же агента (10.88.N.2:7890) → VLESS
 ```
-- В агенте только переменные-заглушки и адреса брокера:
-  - Claude Code: `ANTHROPIC_BASE_URL=http://10.88.N.3:8080/anthropic`, `ANTHROPIC_AUTH_TOKEN=sbx-placeholder`;
-  - Codex: `model_provider` с `base_url` на брокер;
-  - git: `url."http://10.88.N.3:8080/github/".insteadOf https://github.com/`. Брокер
-    добавляет Basic-auth с PAT. SSH-ключей в контейнерах нет вообще;
-  - любой другой API-ключ для проекта: маршрут `/svc/<name>/…` с шаблоном заголовка или параметра.
-- Хранилище: `secrets/keys/<agent>/<service>` (`chmod 600`). Монтируется **только** в
-  `keys`, файлами, а не через env: `docker inspect` у infra не покажет.
-- **Свой набор токенов на каждый тип агента.** Coder получает PAT на свои репозитории,
-  infra — только на `agent-sandbox`, admin и assistant — только LLM.
-- **Политика на маршрут:** разрешённые хосты, пути и методы на каждого агента
-  (например у coder нет `DELETE /repos`), лимит запросов, лог каждого запроса.
-- Выход наружу — через свой вход `in-keys`, где sing-box пропускает только
-  allowlist API-доменов (anthropic, openai, github, googleapis). Даже сам брокер не может
-  ходить куда угодно.
-- Логин: `bin/sandbox login <agent> claude` запускает одноразовый контейнер **без**
-  монтирований, выполняет там `claude setup-token` (долгоживущий OAuth-токен подписки),
-  и токен сразу уходит в `secrets/keys/<agent>/anthropic`. Агент его ни разу не видит.
+- Заглушки в агенте:
+  - Claude Code: `CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-sbx-placeholder`;
+  - git: credential helper отдаёт пароль `ghp_sbxplaceholder…`, брокер подменяет его внутри Basic-auth;
+  - `gh`: `GH_TOKEN` с той же заглушкой;
+  - Codex (подписка ChatGPT): в `~/.codex/auth.json` агента лежат *производные подделки*.
+    У JWT сохранены заголовок и claims (CLI читает план и аккаунт локально), а подпись
+    заменена. Брокер маппит подделку → настоящий токен. На `auth.openai.com/oauth/token` он
+    подставляет настоящий refresh-токен, новые токены из ответа сохраняет у себя, а агенту
+    возвращает новые подделки (`keys/codexauth.py`).
+- Заглушка **никогда** не подменяется в URL или теле запроса (единственное исключение — тело
+  запроса обновления токенов Codex, ответ на который переписывается обратно в подделки).
+  Иначе агент мог бы попросить брокер записать токен, например, в gist и прочитать его оттуда.
+- Хранилище: `secrets/keys/<agent>/<service>` (`chmod 600`), монтируется **только** в `keys`
+  (rw: брокер сохраняет обновлённые токены Codex). `docker inspect` у infra их не покажет.
+- **Свой набор токенов на каждый тип агента** (`keys/policy.json`): coder и infra — anthropic,
+  github, codex; admin и web — только anthropic; cad — anthropic, codex.
+- У assistant в сети нет vpn, поэтому его брокер ходит наружу через отдельную сеть `sbx-keys`, где sing-box
+  пропускает **только** `api.anthropic.com`.
+- Логин (одноразовые контейнеры без монтирований, только через VPN):
+  `bin/sandbox login <agent> claude` (`claude setup-token`) и `bin/sandbox login <agent> codex`
+  (`codex login --device-auth`). Токены сразу уходят в брокер.
 
-Что остаётся: пока агент работает, он может **пользоваться** доступом через брокер
-(тратить лимиты, делать то, что разрешено политикой). Унести токен, чтобы использовать
-его потом или в другом месте, он не может. Поэтому политика и минимальные права у
-токенов (fine-grained PAT) обязательны.
+Что остаётся: пока агент работает, он может **пользоваться** доступом через брокер.
+Унести токен он не может. Поэтому нужны минимальные права у токенов (fine-grained PAT).
 
-⚠️ Требует проверки на практике: работа подписки Claude через подмену токена в брокере
-(OAuth-токен + заголовок `anthropic-beta`) и **Codex с подпиской ChatGPT** (там
-access/refresh-токены и `ChatGPT-Account-Id`). Если не заведётся, вариант надёжнее — API-ключи.
+⚠️ С настоящими аккаунтами ещё не проверено (REPORT.md). Логика подмены покрыта
+`tests/broker.sh`.
 
 ---
 
 ## 4. Типы агентов
 
-Общая база: один образ `agent-base` (Debian slim + Node + `claude` + `codex` + git,
-ripgrep, build-essential, python, go). Агенты различаются compose-сервисом.
+Общая база: один образ `agent-base` (Debian trixie + Node 24 + `claude` + `codex` + git, `gh`, python3/pip,
+Go, Rust/cargo, Lua 5.4, cmake, build-essential, sqlite3, ripgrep, fd, jq, docker CLI). Агенты различаются compose-сервисом.
 Общее для всех: своя `internal`-сеть, `HTTP(S)_PROXY=http://10.88.N.2:7890` (кроме assistant),
 LLM и git через брокер, **ноль секретов в контейнере**, `init: true`, без IPv6.
 В volume `<agent>_home` лежат только история и настройки, токенов там нет.
@@ -150,7 +153,7 @@ LLM и git через брокер, **ноль секретов в контей�
 |---|---|
 | Пользователь | `1000:1000` |
 | Файловая система | rw: `~/agent-sandbox`; `secrets/` перекрыт пустым tmpfs |
-| Docker | **docker-socket-proxy**: `CONTAINERS=1`, `IMAGES=1`, `ALLOW_RESTARTS=1`, `POST=0`, то есть list/inspect/logs/restart. Запрещены create, exec, build, volumes, networks, system |
+| Docker | **docker-socket-proxy только GET** (list/inspect/logs). В socket-proxy v0.5.0 `ALLOW_RESTARTS` работает только вместе с `POST=1`, а это открыло бы `containers/create`. Поэтому перезапуски идут только через твой `bin/sandbox apply` |
 | Сборка образов | только через `bin/sandbox apply` (запускаешь ты), buildx-builder в сети через VPN, так что `RUN` в Dockerfile тоже идёт через прокси. Нужен пакет `docker-buildx` (сейчас не установлен) |
 | Применение изменений | агент правит файлы → коммит → **ты** смотришь `git diff` и запускаешь `bin/sandbox apply` |
 
@@ -187,7 +190,7 @@ prompt injection**. Значит, защита строится так: даже
 | поиск и чтение писем | ✅ сразу. Текст без HTML, ссылки показываются, но не открываются, вложения только как метаданные |
 | ярлыки, архив, «прочитано» | ✅ сразу (обратимо). **Удаление — нельзя** |
 | черновик ответа | ✅ сразу. Черновик никуда не уходит, ты видишь его в почте |
-| **отправка письма** | ⏸ только через очередь одобрения: ты видишь получателей и полный текст на `127.0.0.1:8090` и нажимаешь «отправить» |
+| **отправка письма** | ⏸ только через очередь одобрения: `bin/sandbox approvals` → `show <id>` (получатели и полный текст) → `approve`/`deny`. Это CLI, а не веб-страница: Docker не публикует порты из internal-сетей, а давать mailgw обычную сеть значит выпустить его мимо VPN |
 | событие в календаре без участников | ✅ сразу |
 | событие с участниками, изменение или отмена встреч с другими людьми | ⏸ одобрение (приглашения отправляют письма) |
 | фильтры, пересылка, делегирование, настройки, экспорт контактов | ❌ инструментов нет вообще: это главные каналы утечки |
@@ -229,7 +232,18 @@ prompt injection**. Значит, защита строится так: даже
 | Секреты внутри | ✗ | ✗ | ✗ | ✗ | ✗ |
 | Живёт | постоянно | по требованию | по требованию | по требованию | одна сессия |
 
+`agent-cad`: видит только `~/3d-models`, интернет VPN 80/443, внешнее действие — загрузка на Drive через `drivegw`.
+
 ---
+
+### Тип 6 — `agent-cad` (3D-модели: FreeCAD / Blender) — ✅ реализован
+| Слой | Как |
+|---|---|
+| Файлы | только `~/3d-models` → `/models` (rw) |
+| Инструменты | `freecadcmd` (FreeCAD 1.0) и `blender -b` (Blender 4.3) headless, Python, Claude/Codex |
+| Сеть | своя `sbx-cad`, интернет через VPN, только 80/443 |
+| Google Drive | через шлюз **`drivegw`** (MCP: `drive_upload`, `drive_list`). Токен со scope **`drive.file`**: видны только файлы, созданные самим шлюзом, остальной диск нет. Загрузка только из `/models`, только в папку «Agent Sandbox — 3D models» (+ один уровень подпапок), только модели, картинки и документы, ≤ 200 МБ, ≤ 30 в час. Удаления и скачивания нет |
+| Секреты | ноль. Google-токен лежит в `drivegw`, LLM-токен в брокере |
 
 ## 5. Взаимодействие через herdr
 
@@ -272,7 +286,7 @@ OpenSnitch работает в режиме мониторинга: `DefaultActi
 ```
 OpenSnitch ─┐
 sing-box ───┤
-keys ───────┼──▶ Vector ──▶ Loki ──▶ Grafana  http://127.0.0.1:3000
+keys ───────┼──▶ Vector ──▶ Loki ──▶ Grafana  http://127.0.0.1:3300
 mailgw ─────┤
 host-watch ─┘
 ```
@@ -285,55 +299,52 @@ host-watch ─┘
 
 ```
 agent-sandbox/
-├── ARCHITECTURE.md  LIMITATIONS.md
-├── compose.yaml              # ✅ vpn + сети; позже keys, mailgw, агенты (profiles)
-├── .gitignore                # ✅ secrets/
-├── secrets/                  # ✅ не в git, chmod 600
-│   ├── vless.url             #    твой ключ
-│   ├── dashboard_secret      #    пароль Clash API
-│   └── keys/<agent>/<svc>    #    токены (только для брокера)
-├── vpn/                      # ✅ Dockerfile, entrypoint.sh, gen-config.py, killswitch.nft.tmpl
-├── keys/                     # брокер секретов
-├── mailgw/                   # MCP-шлюз почты и календаря + UI одобрения
-├── agents/{base,admin,assistant}/
-├── monitor/                  # vector, loki, grafana
-├── host/                     # opensnitch/, nm/, systemd/: ставишь ты сам
+├── ARCHITECTURE.md LIMITATIONS.md REPORT.md WINDOWS.md
+├── compose.yaml              # все сервисы; агенты и мониторинг в профилях
+├── .env                      # пути и gid хоста (bin/sandbox init обновляет gid)
+├── secrets/                  # НЕ в git, chmod 600: vless.url, dashboard_secret,
+│                             #   grafana_admin_password, host-wg.json, google-client.json,
+│                             #   keys/<agent>/{anthropic,github,codex-auth.json,google*.json}, keys/ca
+├── vpn/                      # sing-box + nftables kill switch + zashboard
+├── keys/                     # брокер секретов (mitmproxy addon, codexauth, policy.json)
+├── mailgw/                   # шлюзы: mailgw (Gmail/Calendar) и drivegw (Drive), MCP
+├── agents/base|admin|web|assistant|cad/
+├── monitor/                  # vector, loki, grafana (+ дашборд «Запросы»)
+├── host/                     # proxy.pac, nm/ (WG-профиль), systemd/ (watcher), opensnitch/
 ├── proposals/                # предложения agent-admin
-├── bin/
-│   ├── sandbox               # ✅ init / up / down / restart / status / logs / test / dashboard
-│   └── agent                 # запуск агента в herdr
-└── tests/killswitch.sh       # ✅
+├── web-outbox/               # отчёты agent-web (недоверенные)
+├── bin/sandbox bin/agent bin/host-watch bin/versions.py
+└── tests/                    # killswitch.sh, routing.sh, broker.sh, mailgw.sh (+ *_test.py)
 ```
 
 ---
 
-## 8. Проверки (`bin/sandbox test`) — ✅
-Для каждой сети агентов, из одноразового контейнера:
-1. через прокси → IP выхода VPN ≠ IP хоста (при упавшем туннеле нет ответа, fail-closed);
-2. прямой HTTPS на `1.1.1.1` → нет маршрута;
-3. прямой DNS на `8.8.8.8` → нет ответа;
-4. Clash API (`:9090`) из сети агента → недоступен;
-5. egress-сеть из сети агента → недоступна.
-Плюс: из netns vpn прямой трафик режется; nft-таблица на месте; UI на `127.0.0.1:9090` → 200,
-API без secret → 401.
-Позже: в агентах нет файлов с токенами; assistant не может выйти никуда, кроме брокера и mailgw.
+## 8. Проверки (`bin/sandbox test`)
+- **killswitch.sh**: для каждой сети агентов нет прямого HTTPS и DNS, API дашборда недоступен,
+  egress-сеть недоступна. netns vpn режет прямой трафик. По каждому запущенному агенту:
+  нет реальных токенов, правильные монтирования (secrets скрыты, хост read-only, `~/.ssh` не виден,
+  нет setuid), docker только на чтение. assistant без интернета, cad видит только `/models`.
+- **routing.sh**: решения sing-box по каждому входу: web и cad только 80/443, mailgw только
+  googleapis.com, сеть брокера только api.anthropic.com, остальные агенты без ограничений.
+- **broker.sh**: подмена токенов Claude и Codex (включая refresh), заглушки в теле запроса и URL не трогаются.
+- **mailgw.sh**: политика почты, календаря и Drive (одобрения, запрещённые ярлыки, path traversal,
+  лимиты, набор MCP-инструментов).
 
 ---
 
 ## 9. План внедрения
-1. ✅ **VPN + kill switch + дашборд.**
-2. **Брокер `keys`** + `bin/sandbox login` (Claude setup-token, GitHub PAT).
-3. **Базовый образ + agent-coder** (LLM и git через брокер) + **`bin/agent`/herdr**.
-4. **agent-infra** + socket-proxy + `docker-buildx` + git-флоу `apply`.
-5. **agent-admin** (read-only хост + `proposals/`).
-6. Удаление claude/codex с хоста.
-7. **agent-assistant + mailgw** + очередь одобрения.
-8. Хост через VPN (PAC + WG/NM + watcher).
-9. OpenSnitch + мониторинг (Vector/Loki/Grafana).
-10. *(Позже)* ограничения: sing-box по агентам, OpenSnitch по программам хоста.
+1. ✅ VPN + kill switch + дашборд.
+2. ✅ Брокер `keys` + `bin/sandbox login` (Claude setup-token, Codex device-auth, GitHub PAT).
+3. ✅ agent-coder + `bin/agent` для herdr.
+4. ✅ agent-infra + socket-proxy (GET) + `bin/sandbox apply`.
+5. ✅ agent-admin (read-only хост + `proposals/`).
+6. ⏳ Удаление claude/codex с хоста: делаешь ты после проверки логинов (REPORT.md).
+7. ✅ agent-assistant + mailgw + очередь одобрения (CLI).
+8. ✅ Хост через VPN (PAC + WG/NM + watcher): файлы готовы, ставишь ты (REPORT.md).
+9. ✅ Мониторинг (Vector/Loki/Grafana). OpenSnitch: установщик готов, ставишь ты.
+10. ✅ agent-web, ✅ agent-cad + drivegw.
+11. *(Позже)* ограничения: sing-box по агентам, OpenSnitch по программам хоста.
 
 ## 10. Открытые вопросы
-- Транспорт твоего VLESS? Поддерживаются tcp/ws/grpc/httpupgrade/h2 + tls/reality. **xhttp — нет.**
-- Claude и Codex: **подписка или API-ключи**? Отдельный аккаунт или токен на каждый тип агента?
-- Почта и календарь: Gmail/Google Calendar или другой провайдер (Яндекс, Outlook, IMAP/CalDAV)?
 - Нужен ли агентам доступ к локальной сети (NAS, роутер)? Сейчас закрыт.
+- Ограничивать ли домены для coder/infra (allowlist в sing-box)? Механизм уже есть (`DOMAIN_ALLOW`).

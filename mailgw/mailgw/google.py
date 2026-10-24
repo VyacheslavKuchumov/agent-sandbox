@@ -10,6 +10,11 @@ TOKEN_URL = "https://oauth2.googleapis.com/token"
 GMAIL = "https://gmail.googleapis.com/gmail/v1/users/me"
 CAL = "https://www.googleapis.com/calendar/v3/calendars/primary"
 SCOPES = ["https://www.googleapis.com/auth/gmail.modify", "https://www.googleapis.com/auth/calendar.events"]
+# drive.file: only files this app created are visible — the rest of the Drive is not.
+SCOPES_DRIVE = ["https://www.googleapis.com/auth/drive.file"]
+DRIVE = "https://www.googleapis.com/drive/v3"
+DRIVE_UPLOAD = "https://www.googleapis.com/upload/drive/v3"
+FOLDER_MIME = "application/vnd.google-apps.folder"
 
 
 class GoogleError(Exception):
@@ -39,8 +44,9 @@ class Google:
         self._token, self._exp = d["access_token"], time.time() + int(d.get("expires_in", 3600))
         return self._token
 
-    def _call(self, method, url, **kw):
-        r = self.http.request(method, url, headers={"Authorization": f"Bearer {self._access_token()}"}, **kw)
+    def _call(self, method, url, headers_extra=None, **kw):
+        h = {"Authorization": f"Bearer {self._access_token()}", **(headers_extra or {})}
+        r = self.http.request(method, url, headers=h, **kw)
         if r.status_code >= 400:
             raise GoogleError(f"{method} {url.split('?')[0]} → HTTP {r.status_code}: {r.text[:300]}")
         return r.json() if r.content else {}
@@ -110,3 +116,39 @@ class Google:
 
     def delete_event(self, event_id, notify):
         return self._call("DELETE", f"{CAL}/events/{event_id}", params={"sendUpdates": "all" if notify else "none"})
+
+    # --- drive (drive.file scope) ---
+    def drive_find(self, name, parent=None, folder=False):
+        q = [f"name = '{name.replace(chr(39), chr(92) + chr(39))}'", "trashed = false"]
+        if parent:
+            q.append(f"'{parent}' in parents")
+        if folder:
+            q.append(f"mimeType = '{FOLDER_MIME}'")
+        r = self._call("GET", f"{DRIVE}/files", params={"q": " and ".join(q), "fields": "files(id,name,mimeType)"})
+        files = r.get("files", [])
+        return files[0] if files else None
+
+    def drive_folder(self, name, parent=None):
+        f = self.drive_find(name, parent, folder=True)
+        if f:
+            return f["id"]
+        meta = {"name": name, "mimeType": FOLDER_MIME, **({"parents": [parent]} if parent else {})}
+        return self._call("POST", f"{DRIVE}/files", json=meta)["id"]
+
+    def drive_list(self, parent):
+        r = self._call("GET", f"{DRIVE}/files", params={
+            "q": f"'{parent}' in parents and trashed = false", "orderBy": "modifiedTime desc",
+            "fields": "files(id,name,mimeType,size,modifiedTime,webViewLink)", "pageSize": 100})
+        return r.get("files", [])
+
+    def drive_upload(self, parent, name, data, mime):
+        """Create the file in `parent`, or replace the content of a same-named one."""
+        existing = self.drive_find(name, parent)
+        boundary = "sbx" + str(abs(hash(name)))
+        meta = {"name": name} if existing else {"name": name, "parents": [parent]}
+        body = (f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n{json.dumps(meta)}\r\n"
+                f"--{boundary}\r\nContent-Type: {mime}\r\n\r\n").encode() + data + f"\r\n--{boundary}--".encode()
+        url = (f"{DRIVE_UPLOAD}/files/{existing['id']}" if existing else f"{DRIVE_UPLOAD}/files")
+        return self._call("PATCH" if existing else "POST", url,
+                          params={"uploadType": "multipart", "fields": "id,name,webViewLink,size"},
+                          content=body, headers_extra={"Content-Type": f"multipart/related; boundary={boundary}"})

@@ -14,12 +14,13 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 
 import httpx
 
-from .google import SCOPES, TOKEN_URL
+from .google import SCOPES, SCOPES_DRIVE, TOKEN_URL
 
 REDIRECT = "http://localhost:8085/"
 
 
-def main(client_path, out_path):
+def main(client_path, out_path, scope_set="mail"):
+    scopes = SCOPES_DRIVE if scope_set == "drive" else SCOPES
     c = json.load(open(client_path))
     c = c.get("installed") or c.get("web") or c
     verifier = secrets.token_urlsafe(64)
@@ -27,7 +28,7 @@ def main(client_path, out_path):
     state = secrets.token_urlsafe(16)
     url = "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode({
         "client_id": c["client_id"], "redirect_uri": REDIRECT, "response_type": "code",
-        "scope": " ".join(SCOPES), "access_type": "offline", "prompt": "consent",
+        "scope": " ".join(scopes), "access_type": "offline", "prompt": "consent",
         "code_challenge": challenge, "code_challenge_method": "S256", "state": state})
     print("\n1. Open this URL in your browser and allow access:\n\n" + url + "\n")
     print("2. The browser then fails to open http://localhost:8085/?… — that is expected.")
@@ -50,9 +51,9 @@ def main(client_path, out_path):
     with os.fdopen(fd, "w") as f:
         json.dump({"client_id": c["client_id"], "client_secret": c.get("client_secret", ""),
                    "refresh_token": tok["refresh_token"], "scopes": sorted(granted)}, f, indent=2)
-    missing = set(SCOPES) - granted
+    missing = set(scopes) - granted
     print("saved." + (f" WARNING: scopes not granted: {sorted(missing)}" if missing else ""))
 
 
 if __name__ == "__main__":
-    main(sys.argv[1], sys.argv[2])
+    main(*sys.argv[1:4])

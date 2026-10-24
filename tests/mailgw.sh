@@ -1,4 +1,8 @@
 #!/bin/sh
-# Offline tests of the mail gateway policy.
+# Offline tests of the mail and drive gateways.
 cd "$(dirname "$0")/.."
-exec docker run --rm -v "$PWD/tests/mailgw_test.py:/t.py:ro" --entrypoint python agent-sandbox/mailgw:local /t.py
+rc=0
+for t in mailgw_test drive_test; do
+  docker run --rm -v "$PWD/tests/$t.py:/t.py:ro" --entrypoint python agent-sandbox/mailgw:local /t.py || rc=1
+done
+exit $rc

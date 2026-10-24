@@ -13,8 +13,8 @@ probe() { net=$1; shift; docker run --rm --network "$net" --entrypoint sh "$IMG"
 docker inspect sbx-vpn >/dev/null 2>&1 || { echo "sbx-vpn is not running"; exit 1; }
 HOST_IP=$(curl -s --max-time 5 https://ifconfig.me || echo "?")
 
-for n in coder infra admin web; do
-  net=sbx-$n; gw=10.88.$(case $n in coder) echo 1;; infra) echo 2;; admin) echo 3;; web) echo 5;; esac).2
+for n in coder infra admin web cad; do
+  net=sbx-$n; gw=10.88.$(case $n in coder) echo 1;; infra) echo 2;; admin) echo 3;; web) echo 5;; cad) echo 8;; esac).2
   echo "[$n] network $net, proxy $gw:7890"
 
   EXIT_IP=$(docker run --rm --network "$net" --entrypoint sh "$IMG" -c \
@@ -101,6 +101,17 @@ if running sbx-mailgw; then
   echo "[mailgw] gateway container"
   docker exec sbx-mailgw sh -c 'ls /run/google' >/dev/null 2>&1 && ok "mailgw: Google creds mount present" || bad "mailgw: creds mount missing"
   docker exec sbx-agent-assistant sh -c 'test -e /run/google' >/dev/null 2>&1 && bad "assistant sees Google creds!" || ok "assistant: Google creds not mounted"
+fi
+
+if running sbx-agent-cad; then
+  echo "[cad] agent container"
+  cx() { docker exec sbx-agent-cad sh -c "$*" >/dev/null 2>&1; }
+  cx "$tok_scan" && bad "real-looking token inside cad!" || ok "no real tokens inside cad"
+  cx 'blender -b --version' && ok "blender runs headless" || bad "blender does not run"
+  cx 'freecadcmd -c "import FreeCAD; print(FreeCAD.Version())"' && ok "freecadcmd runs" || bad "freecadcmd does not run"
+  cx 'ls /home/kuchumov/Projects' && bad "cad sees ~/Projects!" || ok "cad: only /models visible"
+  cx 'test -e /run/google' && bad "cad sees Google creds!" || ok "cad: Google creds not mounted"
+  cx 'curl -s --max-time 5 --noproxy "*" https://1.1.1.1' && bad "cad has a direct route" || ok "cad: direct route blocked"
 fi
 
 echo "passed: $PASS, failed: $FAIL"

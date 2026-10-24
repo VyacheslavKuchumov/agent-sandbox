@@ -9,6 +9,7 @@ are where supply-chain surprises live). Usage:
 import argparse
 import datetime as dt
 import json
+import os
 import pathlib
 import re
 import sys
@@ -18,7 +19,10 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 
 def get(url):
-    req = urllib.request.Request(url, headers={"User-Agent": "agent-sandbox"})
+    headers = {"User-Agent": "agent-sandbox"}
+    if "api.github.com" in url and os.environ.get("GITHUB_TOKEN"):
+        headers["Authorization"] = f"Bearer {os.environ['GITHUB_TOKEN']}"
+    req = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(req, timeout=20) as r:
         return json.load(r)
 
@@ -64,6 +68,16 @@ PINS = [
      lambda c: npm("@anthropic-ai/claude-code", c)),
     ("codex", "agents/base/Dockerfile", r"ARG CODEX_VERSION=([\d.]+)",
      lambda c: npm("@openai/codex", c)),
+    ("python (mailgw)", "mailgw/Dockerfile", r"FROM python:([\d.]+)-slim-trixie",
+     lambda c: (hub_tag("library/python", r"3\.13\.\d+-slim-trixie", c) or "").replace("-slim-trixie", "")),
+    ("socket-proxy", "compose.yaml", r"tecnativa/docker-socket-proxy:v([\d.]+)",
+     lambda c: (gh_release("Tecnativa/docker-socket-proxy", c) or "").lstrip("v")),
+    ("grafana", "compose.yaml", r"grafana/grafana:([\d.]+)",
+     lambda c: (gh_release("grafana/grafana", c) or "").lstrip("v")),
+    ("loki", "compose.yaml", r"grafana/loki:([\d.]+)",
+     lambda c: hub_tag("grafana/loki", r"3\.\d+\.\d+", c)),
+    ("vector", "compose.yaml", r"timberio/vector:([\d.]+)-alpine",
+     lambda c: (hub_tag("timberio/vector", r"0\.\d+\.\d+-alpine", c) or "").replace("-alpine", "")),
 ]
 
 
@@ -89,7 +103,7 @@ def main():
         mark = "" if new == cur else "  ← update"
         print(f"{name:16} {cur:12} {new:12}{mark}")
         if a.action == "bump" and new != cur and m:
-            path.write_text(text[:m.start(1)] + new + text[m.end(1):])
+            path.write_text(re.sub(rx, lambda mm: mm.group(0).replace(mm.group(1), new), text))
             changed += 1
     if a.action == "bump":
         print(f"bumped {changed} pin(s)")
