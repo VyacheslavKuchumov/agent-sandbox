@@ -1,0 +1,39 @@
+#!/bin/sh
+# Start an agent inside its container, in the current herdr pane.
+#   bin/agent coder            → claude
+#   bin/agent coder codex      → codex
+#   bin/agent coder shell      → bash
+#   bin/agent coder claude --resume   (extra args go to the tool)
+set -eu
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+. "$ROOT/.env"
+
+[ $# -ge 1 ] || { sed -n '2,6p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
+type=$1; tool=${2:-claude}; [ $# -ge 2 ] && shift 2 || shift 1
+c=sbx-agent-$type
+
+# web: a fresh container per session, removed on exit — nothing an injected page
+# does survives. Reports go to ~/agent-sandbox/web-outbox (untrusted).
+if [ "$type" = web ]; then
+  "$ROOT/bin/sandbox" up >/dev/null
+  case $tool in claude) cmd=claude; export HERDR_AGENT=claude ;; shell) cmd=bash ;; *) echo "web supports: claude, shell" >&2; exit 1 ;; esac
+  exec docker compose -f "$ROOT/compose.yaml" --profile web run --rm --name "sbx-agent-web-$$" \
+    --entrypoint sh web -c 'echo "{\"hasCompletedOnboarding\":true}" > ~/.claude.json; exec "$@"' sh "$cmd" "$@"
+fi
+
+if [ "$(docker inspect -f '{{.State.Running}}' "$c" 2>/dev/null)" != true ]; then
+  "$ROOT/bin/sandbox" up "$type" >/dev/null
+fi
+
+# Open the agent in the same folder as the pane when it is inside ~/Projects.
+case $PWD in
+  "$PROJECTS_DIR"|"$PROJECTS_DIR"/*) wd=$PWD ;;
+  *) wd=$PROJECTS_DIR ;;
+esac
+
+case $tool in
+  claude) HERDR_AGENT=claude exec docker exec -it -w "$wd" "$c" claude "$@" ;;
+  codex)  HERDR_AGENT=codex  exec docker exec -it -w "$wd" "$c" codex "$@" ;;
+  shell)  exec docker exec -it -w "$wd" "$c" bash "$@" ;;
+  *) echo "unknown tool: $tool (claude|codex|shell)" >&2; exit 1 ;;
+esac

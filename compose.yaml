@@ -1,0 +1,159 @@
+name: agent-sandbox
+
+# Networks: every agent type has its own internal network (no route outside,
+# no NAT). The only other member of each is the vpn container.
+networks:
+  egress:
+    name: sbx-egress
+    ipam:
+      config: [{ subnet: 10.88.0.0/24 }]
+  coder:
+    name: sbx-coder
+    internal: true
+    ipam:
+      config: [{ subnet: 10.88.1.0/24 }]
+  infra:
+    name: sbx-infra
+    internal: true
+    ipam:
+      config: [{ subnet: 10.88.2.0/24 }]
+  admin:
+    name: sbx-admin
+    internal: true
+    ipam:
+      config: [{ subnet: 10.88.3.0/24 }]
+  web:
+    name: sbx-web
+    internal: true
+    ipam:
+      config: [{ subnet: 10.88.5.0/24 }]
+
+volumes:
+  coder_home:
+
+secrets:
+  vless_url:
+    file: ./secrets/vless.url
+  dashboard_secret:
+    file: ./secrets/dashboard_secret
+
+services:
+  vpn:
+    build: ./vpn
+    image: agent-sandbox/vpn:local
+    container_name: sbx-vpn
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN, SETUID, SETGID]
+    security_opt: [no-new-privileges:true]
+    sysctls:
+      net.ipv6.conf.all.disable_ipv6: 1
+      net.ipv4.ip_forward: 0
+    tmpfs:
+      - /run/sing-box:uid=1000,gid=1000,mode=0755,size=8m
+      - /tmp:size=8m
+    secrets: [vless_url, dashboard_secret]
+    environment:
+      AGENT_INBOUNDS: coder=10.88.1.2,infra=10.88.2.2,admin=10.88.3.2,web=10.88.5.2
+      WEB_ONLY_PORTS: web
+      CONTROLLER: 10.88.0.2:9090
+    ports:
+      - 127.0.0.1:9090:9090
+    networks:
+      egress: { ipv4_address: 10.88.0.2 }
+      coder: { ipv4_address: 10.88.1.2 }
+      infra: { ipv4_address: 10.88.2.2 }
+      admin: { ipv4_address: 10.88.3.2 }
+      web: { ipv4_address: 10.88.5.2 }
+    mem_limit: 256m
+    pids_limit: 128
+
+  # Credential broker: the only place real tokens live. One mitmproxy per agent
+  # network; swaps placeholders in auth headers for allow-listed API hosts.
+  keys:
+    build: ./keys
+    image: agent-sandbox/keys:local
+    container_name: sbx-keys
+    restart: unless-stopped
+    depends_on: [vpn]
+    read_only: true
+    user: "1000:1000"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /tmp:size=64m
+      - /home/mitmproxy:uid=1000,gid=1000,size=16m
+    environment:
+      SBX_CA_DIR: /run/keys/ca
+    volumes:
+      - ./secrets/keys:/run/keys:ro
+    networks:
+      coder: { ipv4_address: 10.88.1.3 }
+      web: { ipv4_address: 10.88.5.3 }
+    mem_limit: 256m
+    pids_limit: 128
+
+  # Type 1: coding agent. Sees only ~/Projects; holds no secrets.
+  coder:
+    image: agent-sandbox/agent-base:local
+    container_name: sbx-agent-coder
+    profiles: [coder]
+    restart: unless-stopped
+    depends_on: [keys]
+    read_only: true
+    user: "1000:1000"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /tmp:exec,size=2g
+    environment:
+      HTTP_PROXY: http://10.88.1.3:8080
+      HTTPS_PROXY: http://10.88.1.3:8080
+      http_proxy: http://10.88.1.3:8080
+      https_proxy: http://10.88.1.3:8080
+      NO_PROXY: localhost,127.0.0.1
+      no_proxy: localhost,127.0.0.1
+      CLAUDE_CODE_OAUTH_TOKEN: sk-ant-oat01-sbx-placeholder
+      GH_TOKEN: ghp_sbxplaceholder0000000000000000000000
+      SBX_AGENT: coder
+    volumes:
+      - coder_home:/home/agent
+      - ${PROJECTS_DIR}:${PROJECTS_DIR}
+    networks:
+      coder: { ipv4_address: 10.88.1.11 }
+    mem_limit: 8g
+    cpus: 4
+    pids_limit: 4096
+
+  # Type 5: web browsing / research. Expect prompt injection: nothing to steal,
+  # nothing persists (fresh container per session), no shell, ports 80/443 only.
+  web:
+    image: agent-sandbox/agent-base:local
+    profiles: [web]
+    depends_on: [keys]
+    read_only: true
+    user: "1000:1000"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /home/agent:uid=1000,gid=1000,mode=0700,size=256m
+      - /tmp:size=512m
+    environment:
+      HTTP_PROXY: http://10.88.5.3:8080
+      HTTPS_PROXY: http://10.88.5.3:8080
+      http_proxy: http://10.88.5.3:8080
+      https_proxy: http://10.88.5.3:8080
+      NO_PROXY: localhost,127.0.0.1
+      no_proxy: localhost,127.0.0.1
+      CLAUDE_CODE_OAUTH_TOKEN: sk-ant-oat01-sbx-placeholder
+      SBX_AGENT: web
+    volumes:
+      - ./agents/web/managed-settings.json:/etc/claude-code/managed-settings.json:ro
+      - ./web-outbox:/outbox
+    working_dir: /outbox
+    networks:
+      web: { ipv4_address: 10.88.5.11 }
+    mem_limit: 4g
+    cpus: 2
+    pids_limit: 512

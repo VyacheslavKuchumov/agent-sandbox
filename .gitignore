@@ -1,0 +1,5 @@
+secrets/*
+!secrets/*.example
+agents/base/sbx-ca.crt
+web-outbox/*
+!web-outbox/README.md

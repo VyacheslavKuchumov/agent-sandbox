@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": ["WebFetch", "WebSearch", "Read", "Write(//outbox/**)"],
+    "deny": ["Bash", "Edit", "NotebookEdit"],
+    "disableBypassPermissionsMode": "disable"
+  }
+}

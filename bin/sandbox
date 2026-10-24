@@ -1,0 +1,183 @@
+#!/bin/sh
+# Agent sandbox control. Run `bin/sandbox help` for commands.
+set -eu
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+cd "$ROOT"
+
+AGENTS="coder web"          # agent types implemented so far
+SERVICES="anthropic github"
+
+usage() {
+  cat <<'EOF'
+usage: bin/sandbox <command> [args]
+
+ Setup
+  init                       create secrets/ (key placeholder, dashboard secret, broker CA)
+  vless                      paste your vless:// key, restart vpn and run tests
+
+ Run
+  up [agent...]              start vpn + broker (+ given agents, e.g. `up coder`)
+  down                       stop everything
+  restart [service...]       restart services (default: vpn keys)
+  status                     containers, health, which keys are configured
+  logs [vpn|keys|<agent>]    follow logs (vpn = connections, keys = API calls)
+
+ Auth (tokens never enter agent containers)
+  login <agent> claude       Claude subscription: one-off `claude setup-token`, token → broker
+  key <agent> <service>      store a token for the broker (e.g. `key coder github` = PAT)
+  key-rm <agent> <service>   delete a stored token
+  keys                       list configured tokens (names only)
+
+ Maintenance
+  update [--check] [--min-age N]  bump claude/codex/sing-box/... to stable releases ≥N days old
+                                  (default 14), rebuild images, restart running containers
+  rebuild                    rebuild all images without changing versions
+
+ Checks
+  test                       kill switch + isolation checks
+  dashboard                  dashboard URL and secret
+EOF
+}
+
+die() { echo "sandbox: $*" >&2; exit 1; }
+is_agent() { for a in $AGENTS; do [ "$a" = "$1" ] && return 0; done; return 1; }
+net_of() { case $1 in coder) echo 1;; infra) echo 2;; admin) echo 3;; assistant) echo 4;; web) echo 5;; esac; }
+
+cmd_init() {
+  umask 077
+  mkdir -p secrets/keys/ca
+  [ -s secrets/dashboard_secret ] || { head -c 24 /dev/urandom | base64 | tr -d '/+=' > secrets/dashboard_secret; echo "created secrets/dashboard_secret"; }
+  [ -s secrets/vless.url ] || { cp secrets/vless.url.example secrets/vless.url; echo "created secrets/vless.url — run: bin/sandbox vless"; }
+  if [ ! -s secrets/keys/ca/mitmproxy-ca.pem ]; then
+    docker run --rm -u "$(id -u):$(id -g)" -v "$ROOT/secrets/keys/ca:/ca" --entrypoint python3 \
+      "$(sed -n 's/^FROM //p' keys/Dockerfile)" \
+      -c "from mitmproxy.certs import CertStore; CertStore.from_store('/ca','mitmproxy',2048)"
+    echo "created broker CA (secrets/keys/ca)"
+  fi
+  for a in $AGENTS; do mkdir -p "secrets/keys/$a"; done
+  chmod -R go-rwx secrets
+}
+
+cmd_rebuild() {
+  cmd_init >/dev/null
+  cp secrets/keys/ca/mitmproxy-ca-cert.pem agents/base/sbx-ca.crt
+  docker compose build vpn keys
+  docker build -t agent-sandbox/agent-base:local agents/base
+}
+
+running_services() {
+  docker compose ps --services --status running 2>/dev/null || true
+}
+
+cmd_up() {
+  cmd_init >/dev/null
+  docker image inspect agent-sandbox/agent-base:local >/dev/null 2>&1 || cmd_rebuild
+  docker compose up -d vpn keys
+  for a in "$@"; do
+    is_agent "$a" || die "unknown agent: $a (available: $AGENTS)"
+    [ "$a" = web ] && { echo "web is per-session: use bin/agent web"; continue; }
+    docker compose --profile "$a" up -d "$a"
+  done
+}
+
+cmd_status() {
+  docker ps -a --filter name=sbx- --format 'table {{.Names}}\t{{.Status}}'
+  echo; cmd_keys
+}
+
+cmd_keys() {
+  printf '%-10s' "agent"; for s in $SERVICES; do printf '%-12s' "$s"; done; echo
+  for a in $AGENTS; do
+    printf '%-10s' "$a"
+    for s in $SERVICES; do [ -s "secrets/keys/$a/$s" ] && printf '%-12s' "✓" || printf '%-12s' "-"; done
+    echo
+  done
+}
+
+save_secret() {  # agent service value
+  umask 077; mkdir -p "secrets/keys/$1"
+  printf '%s\n' "$3" > "secrets/keys/$1/$2"
+  docker compose restart keys >/dev/null && echo "saved secrets/keys/$1/$2, broker restarted"
+}
+
+cmd_key() {
+  [ $# -eq 2 ] || die "usage: key <agent> <service>"
+  is_agent "$1" || die "unknown agent: $1"
+  printf 'paste token for %s/%s (input hidden): ' "$1" "$2"
+  stty -echo; read -r tok; stty echo; echo
+  [ -n "$tok" ] || die "empty token"
+  save_secret "$1" "$2" "$tok"
+}
+
+cmd_login() {
+  [ $# -eq 2 ] || die "usage: login <agent> claude"
+  is_agent "$1" || die "unknown agent: $1"
+  agent=$1; n=$(net_of "$agent")
+  case $2 in
+    claude)
+      echo "Starting a one-off container (no mounts, deleted afterwards) for 'claude setup-token'."
+      echo "Open the link in your browser, paste the code back. The token is captured automatically."
+      log=$(mktemp -p "${XDG_RUNTIME_DIR:-/tmp}" sbx-login.XXXXXX)
+      trap 'shred -u "$log" 2>/dev/null || rm -f "$log"' EXIT INT TERM
+      # Straight to the vpn proxy (not the broker): the real token exists only here.
+      script -q -e -c "docker run --rm -it --network sbx-$agent \
+          -e HTTPS_PROXY=http://10.88.$n.2:7890 -e HTTP_PROXY=http://10.88.$n.2:7890 \
+          --entrypoint claude agent-sandbox/agent-base:local setup-token" "$log" || true
+      tok=$(tr -d '\r' < "$log" | grep -o 'sk-ant-oat01-[A-Za-z0-9_-]\{20,\}' | tail -1 || true)
+      if [ -z "$tok" ]; then
+        printf 'token not found in output — paste it manually (hidden): '
+        stty -echo; read -r tok; stty echo; echo
+      fi
+      [ -n "$tok" ] || die "no token"
+      save_secret "$agent" anthropic "$tok" ;;
+    codex)
+      die "codex via subscription is not wired into the broker yet (ChatGPT tokens refresh themselves) — next step" ;;
+    *) die "unknown tool: $2" ;;
+  esac
+}
+
+cmd_update() {
+  mode=bump; age=14
+  while [ $# -gt 0 ]; do
+    case $1 in --check) mode=check;; --min-age) age=$2; shift;; *) die "unknown option $1";; esac; shift
+  done
+  python3 -I bin/versions.py "$mode" --min-age "$age"
+  [ "$mode" = bump ] || return 0
+  was=$(running_services)
+  cmd_rebuild
+  [ -n "$was" ] && docker compose --profile "*" up -d $was
+  echo "update done. running: $(running_services | tr '\n' ' ')"
+}
+
+cmd_vless() {
+  printf 'paste your vless:// key (input hidden): '
+  stty -echo; read -r url; stty echo; echo
+  case $url in vless://*) ;; *) die "expected a vless:// URL";; esac
+  umask 077; printf '%s\n' "$url" > secrets/vless.url
+  docker compose up -d --force-recreate vpn
+  echo "waiting for tunnel..."; sleep 6
+  docker logs sbx-vpn 2>&1 | grep -E "gen-config|entrypoint|ERROR" | tail -5
+  tests/killswitch.sh
+}
+
+case "${1:-help}" in
+  init)      cmd_init ;;
+  vless)     cmd_vless ;;
+  up)        shift; cmd_up "$@" ;;
+  down)      docker compose --profile "*" down ;;
+  restart)   shift; docker compose restart ${*:-vpn keys} ;;
+  status)    cmd_status ;;
+  logs)      case ${2:-vpn} in vpn) docker logs -f --tail 50 sbx-vpn;; keys) docker logs -f --tail 50 sbx-keys;;
+               *) docker logs -f --tail 50 "sbx-agent-$2";; esac ;;
+  login)     shift; cmd_login "$@" ;;
+  key)       shift; cmd_key "$@" ;;
+  key-rm)    shift; [ $# -eq 2 ] || die "usage: key-rm <agent> <service>"; rm -f "secrets/keys/$1/$2"; docker compose restart keys >/dev/null; echo "removed" ;;
+  keys)      cmd_keys ;;
+  update)    shift; cmd_update "$@" ;;
+  rebuild)   cmd_rebuild ;;
+  test)      exec tests/killswitch.sh ;;
+  dashboard) echo "URL:    http://127.0.0.1:9090/ui/  (backend: http://127.0.0.1:9090)"
+             echo "Secret: $(cat secrets/dashboard_secret)" ;;
+  help|-h|--help) usage ;;
+  *)         usage; exit 1 ;;
+esac

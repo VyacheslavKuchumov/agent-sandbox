@@ -1,0 +1,5 @@
+# Git never sees a real token: the broker swaps this placeholder on the way to GitHub.
+[credential "https://github.com"]
+	helper = "!f() { echo username=x-access-token; echo password=ghp_sbxplaceholder0000000000000000000000; }; f"
+[init]
+	defaultBranch = main

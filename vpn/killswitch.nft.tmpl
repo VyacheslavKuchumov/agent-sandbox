@@ -1,0 +1,28 @@
+# Kill switch inside the vpn container netns.
+# Only the VLESS server is reachable from the egress interface; agents may only
+# talk to the proxy port. Our own table — Docker's DNS rules stay untouched.
+table inet sbx_killswitch
+delete table inet sbx_killswitch
+
+table inet sbx_killswitch {
+    chain input {
+        type filter hook input priority filter; policy drop;
+        iif "lo" accept
+        ct state invalid drop
+        ct state established,related accept
+        iifname { @AGENT_IFS@ } tcp dport @PROXY_PORT@ accept
+        iifname "@EGRESS_IF@" tcp dport @DASH_PORT@ accept
+    }
+
+    chain forward {
+        type filter hook forward priority filter; policy drop;
+    }
+
+    chain output {
+        type filter hook output priority filter; policy drop;
+        oif "lo" accept
+        ct state invalid drop
+        ct state established,related accept
+        oifname "@EGRESS_IF@" ip daddr @SERVER_IP@ tcp dport @SERVER_PORT@ accept
+    }
+}
