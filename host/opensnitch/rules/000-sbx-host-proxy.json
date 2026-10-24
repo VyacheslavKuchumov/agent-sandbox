@@ -1,0 +1,33 @@
+{
+  "created": "2026-10-24T00:00:00Z",
+  "updated": "2026-10-24T00:00:00Z",
+  "name": "000-sbx-host-proxy",
+  "description": "Apps using the agent-sandbox proxy 127.0.0.1:7891",
+  "enabled": true,
+  "precedence": true,
+  "nolog": false,
+  "action": "allow",
+  "duration": "always",
+  "operator": {
+    "type": "list",
+    "operand": "list",
+    "sensitive": false,
+    "data": "",
+    "list": [
+      {
+        "type": "simple",
+        "operand": "dest.ip",
+        "sensitive": false,
+        "data": "127.0.0.1",
+        "list": []
+      },
+      {
+        "type": "simple",
+        "operand": "dest.port",
+        "sensitive": false,
+        "data": "7891",
+        "list": []
+      }
+    ]
+  }
+}

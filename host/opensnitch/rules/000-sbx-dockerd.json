@@ -1,0 +1,18 @@
+{
+  "created": "2026-10-24T00:00:00Z",
+  "updated": "2026-10-24T00:00:00Z",
+  "name": "000-sbx-dockerd",
+  "description": "Docker daemon (pulls, embedded DNS)",
+  "enabled": true,
+  "precedence": true,
+  "nolog": false,
+  "action": "allow",
+  "duration": "always",
+  "operator": {
+    "type": "simple",
+    "operand": "process.path",
+    "sensitive": false,
+    "data": "/usr/bin/dockerd",
+    "list": []
+  }
+}

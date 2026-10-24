@@ -1,0 +1,11 @@
+[Unit]
+Description=agent-sandbox host VPN watcher (falls back to direct when the tunnel is down)
+After=network-online.target
+
+[Service]
+ExecStart=%h/agent-sandbox/bin/host-watch
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

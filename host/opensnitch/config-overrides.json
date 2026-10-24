@@ -1,0 +1,19 @@
+{
+  "_doc": "Merged into /etc/opensnitchd/default-config.json by host/opensnitch/install.sh (monitoring mode: allow everything, log everything).",
+  "DefaultAction": "allow",
+  "DefaultDuration": "always",
+  "InterceptUnknown": true,
+  "LogLevel": 1,
+  "Server": {
+    "Loggers": [
+      {
+        "Name": "remote_syslog",
+        "Server": "127.0.0.1:5140",
+        "Protocol": "udp",
+        "Format": "rfc5424",
+        "Tag": "opensnitch",
+        "Workers": 2
+      }
+    ]
+  }
+}

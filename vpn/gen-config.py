@@ -139,6 +139,25 @@ def web_only_rules():
     return [{"inbound": tags, "port": [80, 443], "invert": True, "action": "reject"}]
 
 
+def host_endpoints():
+    """Optional WireGuard endpoint for the host (bin/sandbox host-vpn install)."""
+    try:
+        wg = json.load(open("/run/secrets/host_wg"))
+    except (OSError, ValueError):
+        return []
+    if not wg.get("server_private"):
+        return []
+    return [{
+        "type": "wireguard",
+        "tag": "in-host-wg",
+        "system": False,
+        "address": ["10.99.0.1/24"],
+        "private_key": wg["server_private"],
+        "listen_port": int(os.environ.get("HOST_WG_PORT", "51820")),
+        "peers": [{"public_key": wg["client_public"], "allowed_ips": ["10.99.0.2/32"]}],
+    }]
+
+
 def main():
     outbound, server_ip, server_port = vless_outbound(read_secret("vless_url"))
     dash_secret = read_secret("dashboard_secret")
@@ -148,6 +167,11 @@ def main():
         name, ip = item.split("=")
         ipaddress.IPv4Address(ip)
         inbounds.append({"type": "mixed", "tag": f"in-{name}", "listen": ip, "listen_port": PROXY_PORT})
+    host_proxy = os.environ.get("HOST_PROXY")  # e.g. 10.88.0.2:7891, published on 127.0.0.1
+    if host_proxy:
+        ip, port = host_proxy.rsplit(":", 1)
+        inbounds.append({"type": "mixed", "tag": "in-host", "listen": ip, "listen_port": int(port)})
+    endpoints = host_endpoints()
 
     config = {
         "log": {"level": os.environ.get("LOG_LEVEL", "info"), "timestamp": True},
@@ -158,6 +182,7 @@ def main():
             "strategy": "ipv4_only",
         },
         "inbounds": inbounds,
+        **({"endpoints": endpoints} if endpoints else {}),
         "outbounds": [outbound],
         "route": {
             "rules": [
@@ -187,7 +212,8 @@ def main():
 
     t = outbound.get("transport", {}).get("type", "tcp")
     sec = "reality" if outbound.get("tls", {}).get("reality") else ("tls" if "tls" in outbound else "none")
-    print(f"gen-config: vless {server_ip}:{server_port} transport={t} security={sec}")
+    print(f"gen-config: vless {server_ip}:{server_port} transport={t} security={sec}"
+          f"{' host-proxy=' + host_proxy if host_proxy else ''}{' host-wg=on' if endpoints else ''}")
 
 
 if __name__ == "__main__":

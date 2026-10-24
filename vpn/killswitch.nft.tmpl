@@ -12,6 +12,8 @@ table inet sbx_killswitch {
         ct state established,related accept
         iifname { @AGENT_IFS@ } tcp dport @PROXY_PORT@ accept
         iifname "@EGRESS_IF@" tcp dport @DASH_PORT@ accept
+        iifname "@EGRESS_IF@" tcp dport @HOST_PROXY_PORT@ accept
+        iifname "@EGRESS_IF@" udp dport @HOST_WG_PORT@ accept
     }
 
     chain forward {

@@ -1,0 +1,32 @@
+#!/bin/sh
+# Host VPN watcher (no kill switch for the host, on purpose): while the user wants
+# the host VPN on, keep the NetworkManager profile up only while the tunnel works;
+# drop it (→ direct internet) when the tunnel is down, bring it back when it heals.
+# Probe goes through 127.0.0.1:7891 (published port), independent of the NM profile.
+CON=agent-vpn
+WANT=${XDG_STATE_HOME:-$HOME/.local/state}/agent-sandbox/host-vpn-wanted
+INTERVAL=${INTERVAL:-5}
+FAILS_TO_DROP=${FAILS_TO_DROP:-2}
+
+log() {
+  logger -t sbx-host-watch "$1"
+  logger -n 127.0.0.1 -P 5140 -d -t sbx-host-watch "{\"event\":\"$2\",\"summary\":\"$1\"}" 2>/dev/null || true
+}
+active() { nmcli -t -f NAME connection show --active | grep -qx "$CON"; }
+probe() { curl -s -o /dev/null --max-time 4 -x http://127.0.0.1:7891 https://www.gstatic.com/generate_204; }
+
+fails=0
+while :; do
+  if [ -e "$WANT" ]; then
+    if probe; then
+      fails=0
+      active || { nmcli connection up "$CON" >/dev/null 2>&1 && log "tunnel healthy → host via VPN" vpn; }
+    else
+      fails=$((fails + 1))
+      if [ "$fails" -ge "$FAILS_TO_DROP" ] && active; then
+        nmcli connection down "$CON" >/dev/null 2>&1 && log "tunnel down → host direct" direct
+      fi
+    fi
+  fi
+  sleep "$INTERVAL"
+done

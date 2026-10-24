@@ -6,6 +6,7 @@ RUN_DIR=/run/sing-box
 APP_UID=1000:1000
 PROXY_PORT=${PROXY_PORT:-7890}
 DASH_PORT=${CONTROLLER##*:}
+HOST_PROXY=${HOST_PROXY:-10.88.0.2:7891}
 
 die() { echo "entrypoint: $*" >&2; exit 1; }
 
@@ -23,6 +24,8 @@ sed -e "s/@AGENT_IFS@/$AGENT_IFS/" \
     -e "s/@EGRESS_IF@/$EGRESS_IF/g" \
     -e "s/@PROXY_PORT@/$PROXY_PORT/g" \
     -e "s/@DASH_PORT@/$DASH_PORT/g" \
+    -e "s/@HOST_PROXY_PORT@/${HOST_PROXY##*:}/g" \
+    -e "s/@HOST_WG_PORT@/${HOST_WG_PORT:-51820}/g" \
     -e "s/@SERVER_IP@/$SERVER_IP/g" \
     -e "s/@SERVER_PORT@/$SERVER_PORT/g" \
     /opt/vpn/killswitch.nft.tmpl > /tmp/killswitch.nft

@@ -48,6 +48,8 @@ secrets:
     file: ./secrets/dashboard_secret
   grafana_admin_password:
     file: ./secrets/grafana_admin_password
+  host_wg:
+    file: ./secrets/host-wg.json
 
 services:
   vpn:
@@ -65,13 +67,16 @@ services:
     tmpfs:
       - /run/sing-box:uid=1000,gid=1000,mode=0755,size=8m
       - /tmp:size=8m
-    secrets: [vless_url, dashboard_secret]
+    secrets: [vless_url, dashboard_secret, host_wg]
     environment:
       AGENT_INBOUNDS: coder=10.88.1.2,infra=10.88.2.2,admin=10.88.3.2,web=10.88.5.2
       WEB_ONLY_PORTS: web
       CONTROLLER: 10.88.0.2:9090
+      HOST_PROXY: 10.88.0.2:7891   # host apps / browser (PAC), no kill switch
+      HOST_WG_PORT: 51820          # host full tunnel via NetworkManager (10.88.0.2:51820)
     ports:
       - 127.0.0.1:9090:9090
+      - 127.0.0.1:7891:7891
     networks:
       egress: { ipv4_address: 10.88.0.2 }
       coder: { ipv4_address: 10.88.1.2 }

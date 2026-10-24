@@ -30,6 +30,12 @@ usage: bin/sandbox <command> [args]
   key-rm <agent> <service>   delete a stored token
   keys                       list configured tokens (names only)
 
+ Host (no kill switch: falls back to direct when the tunnel is down)
+  host-vpn install           WireGuard keys + NetworkManager profile (you install it with sudo)
+  host-vpn watch-install     enable the watcher user service
+  host-vpn on|off|status     want the host on the VPN / direct; show state
+                             browser only: PAC file host/proxy.pac (proxy 127.0.0.1:7891)
+
  Maintenance
   update [--check] [--min-age N]  bump claude/codex/sing-box/... to stable releases ≥N days old
                                   (default 14), rebuild images, restart running containers
@@ -51,6 +57,7 @@ cmd_init() {
   umask 077
   mkdir -p secrets/keys/ca
   [ -s secrets/grafana_admin_password ] || { head -c 18 /dev/urandom | base64 | tr -d '/+=' > secrets/grafana_admin_password; echo "created secrets/grafana_admin_password"; }
+  [ -e secrets/host-wg.json ] || echo '{}' > secrets/host-wg.json
   [ -s secrets/dashboard_secret ] || { head -c 24 /dev/urandom | base64 | tr -d '/+=' > secrets/dashboard_secret; echo "created secrets/dashboard_secret"; }
   [ -s secrets/vless.url ] || { cp secrets/vless.url.example secrets/vless.url; echo "created secrets/vless.url — run: bin/sandbox vless"; }
   if [ ! -s secrets/keys/ca/mitmproxy-ca.pem ]; then
@@ -196,6 +203,67 @@ cmd_update() {
   echo "update done. running: $(running_services | tr '\n' ' ')"
 }
 
+WANT_FLAG=${XDG_STATE_HOME:-$HOME/.local/state}/agent-sandbox/host-vpn-wanted
+
+cmd_host_vpn() {
+  case ${1:-status} in
+    install)
+      cmd_init >/dev/null
+      if ! python3 -I -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get("server_private") else 1)' secrets/host-wg.json; then
+        kp() { docker run --rm --entrypoint sing-box agent-sandbox/vpn:local generate wg-keypair; }
+        s=$(kp); c=$(kp)
+        umask 077
+        python3 -I - "$s" "$c" > secrets/host-wg.json <<'PY'
+import json, sys
+def parse(t): return dict(l.split(": ", 1) for l in t.strip().splitlines())
+s, c = parse(sys.argv[1]), parse(sys.argv[2])
+json.dump({"server_private": s["PrivateKey"], "server_public": s["PublicKey"],
+           "client_private": c["PrivateKey"], "client_public": c["PublicKey"]}, sys.stdout, indent=2)
+PY
+        echo "generated WireGuard keys (secrets/host-wg.json)"
+      fi
+      docker compose up -d --force-recreate vpn >/dev/null
+      mkdir -p secrets/host
+      python3 -I - > secrets/host/agent-vpn.nmconnection <<'PY'
+import json, uuid
+wg = json.load(open("secrets/host-wg.json"))
+t = open("host/nm/agent-vpn.nmconnection.tmpl").read()
+t = "\n".join(l for l in t.splitlines() if not l.startswith("#")) + "\n"
+print(t.replace("@UUID@", str(uuid.uuid5(uuid.NAMESPACE_DNS, wg["client_public"])))
+       .replace("@CLIENT_PRIVATE@", wg["client_private"])
+       .replace("@SERVER_PUBLIC@", wg["server_public"]), end="")
+PY
+      chmod 600 secrets/host/agent-vpn.nmconnection
+      cat <<EOT
+vpn container now accepts the host on 10.88.0.2:51820. Install the NetworkManager
+profile (needs root, review it first):
+
+  sudo install -m 600 -o root -g root secrets/host/agent-vpn.nmconnection /etc/NetworkManager/system-connections/
+  sudo nmcli connection reload
+
+Then enable the watcher (user service, falls back to direct internet when the tunnel is down):
+
+  bin/sandbox host-vpn watch-install
+  bin/sandbox host-vpn on
+EOT
+      ;;
+    watch-install)
+      mkdir -p "$HOME/.config/systemd/user"
+      cp host/systemd/sandbox-host-watch.service "$HOME/.config/systemd/user/"
+      systemctl --user daemon-reload
+      systemctl --user enable --now sandbox-host-watch.service
+      echo "watcher enabled (journalctl --user -u sandbox-host-watch -f)" ;;
+    on)  mkdir -p "$(dirname "$WANT_FLAG")"; touch "$WANT_FLAG"; echo "host VPN wanted: on (watcher connects when the tunnel is healthy)" ;;
+    off) rm -f "$WANT_FLAG"; nmcli connection down agent-vpn >/dev/null 2>&1 || true; echo "host VPN off (direct)" ;;
+    status)
+      [ -e "$WANT_FLAG" ] && echo "wanted:  on" || echo "wanted:  off"
+      nmcli -t -f NAME connection show --active 2>/dev/null | grep -qx agent-vpn && echo "profile: active (host via VPN)" || echo "profile: inactive (host direct)"
+      systemctl --user is-active sandbox-host-watch.service >/dev/null 2>&1 && echo "watcher: running" || echo "watcher: not running"
+      curl -s -o /dev/null --max-time 4 -x http://127.0.0.1:7891 https://www.gstatic.com/generate_204 && echo "tunnel:  healthy" || echo "tunnel:  down" ;;
+    *) die "usage: host-vpn install|watch-install|on|off|status" ;;
+  esac
+}
+
 cmd_vless() {
   printf 'paste your vless:// key (input hidden): '
   stty -echo; read -r url; stty echo; echo
@@ -228,6 +296,7 @@ case "${1:-help}" in
              echo "Secret: $(cat secrets/dashboard_secret)" ;;
   grafana)   echo "URL:      http://127.0.0.1:3300/  (dashboard «Запросы»)"
              echo "Login:    admin / $(cat secrets/grafana_admin_password)" ;;
+  host-vpn)  shift; cmd_host_vpn "$@" ;;
   help|-h|--help) usage ;;
   *)         usage; exit 1 ;;
 esac
