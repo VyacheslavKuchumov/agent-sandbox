@@ -12,7 +12,7 @@
       {
         "name": "agent",
         "type": "custom",
-        "query": "coder,infra,admin,web,assistant,keys,host",
+        "query": "coder,infra,admin,web,assistant,cad,opencode,keys,host",
         "multi": true,
         "includeAll": true,
         "current": {

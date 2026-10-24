@@ -42,6 +42,11 @@ networks:
     internal: true
     ipam:
       config: [{ subnet: 10.88.8.0/24 }]
+  opencode:
+    name: sbx-opencode
+    internal: true
+    ipam:
+      config: [{ subnet: 10.88.10.0/24 }]
   # Broker upstream for agents whose own network has no vpn (assistant).
   keysnet:
     name: sbx-keys
@@ -62,6 +67,7 @@ volumes:
   assistant_home:
   mailgw_state:
   cad_home:
+  opencode_home:
   loki_data:
   grafana_data:
 
@@ -93,8 +99,8 @@ services:
       - /tmp:size=8m
     secrets: [vless_url, dashboard_secret, host_wg]
     environment:
-      AGENT_INBOUNDS: coder=10.88.1.2,infra=10.88.2.2,admin=10.88.3.2,web=10.88.5.2,mailgw=10.88.6.2,keys=10.88.9.2,cad=10.88.8.2
-      WEB_ONLY_PORTS: web,cad
+      AGENT_INBOUNDS: coder=10.88.1.2,infra=10.88.2.2,admin=10.88.3.2,web=10.88.5.2,mailgw=10.88.6.2,keys=10.88.9.2,cad=10.88.8.2,opencode=10.88.10.2
+      WEB_ONLY_PORTS: web,cad,opencode
       DOMAIN_ALLOW: mailgw=googleapis.com;keys=api.anthropic.com
       CONTROLLER: 10.88.0.2:9090
       HOST_PROXY: 10.88.0.2:7891   # host apps / browser (PAC), no kill switch
@@ -111,6 +117,7 @@ services:
       mailgw: { ipv4_address: 10.88.6.2 }
       keysnet: { ipv4_address: 10.88.9.2 }
       cad: { ipv4_address: 10.88.8.2 }
+      opencode: { ipv4_address: 10.88.10.2 }
     mem_limit: 256m
     pids_limit: 128
 
@@ -440,6 +447,38 @@ services:
     mem_limit: 8g
     cpus: 4
     pids_limit: 2048
+
+  # Type 7: opencode with its free Zen models. Sees only ~/Projects, holds no
+  # secrets and has no broker: straight to the vpn, ports 80/443 only.
+  opencode:
+    build: ./agents/opencode
+    image: agent-sandbox/agent-opencode:local
+    container_name: sbx-agent-opencode
+    profiles: [opencode]
+    restart: unless-stopped
+    depends_on: [vpn]
+    read_only: true
+    user: "1000:1000"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /tmp:exec,size=2g
+    environment:
+      HTTP_PROXY: http://10.88.10.2:7890
+      HTTPS_PROXY: http://10.88.10.2:7890
+      http_proxy: http://10.88.10.2:7890
+      https_proxy: http://10.88.10.2:7890
+      NO_PROXY: localhost,127.0.0.1
+      no_proxy: localhost,127.0.0.1
+      SBX_AGENT: opencode
+    volumes:
+      - opencode_home:/home/agent
+      - ${PROJECTS_DIR}:${PROJECTS_DIR}
+    networks:
+      opencode: { ipv4_address: 10.88.10.11 }
+    mem_limit: 8g
+    cpus: 4
+    pids_limit: 4096
 
   # ---- monitoring (profile: monitor) ----
   dockerproxy-monitor:

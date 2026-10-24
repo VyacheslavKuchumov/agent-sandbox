@@ -68,6 +68,8 @@ PINS = [
      lambda c: npm("@anthropic-ai/claude-code", c)),
     ("codex", "agents/base/Dockerfile", r"ARG CODEX_VERSION=([\d.]+)",
      lambda c: npm("@openai/codex", c)),
+    ("opencode", "agents/opencode/Dockerfile", r"ARG OPENCODE_VERSION=([\d.]+)",
+     lambda c: npm("opencode-ai", c)),
     ("python (mailgw)", "mailgw/Dockerfile", r"FROM python:([\d.]+)-slim-trixie",
      lambda c: (hub_tag("library/python", r"3\.13\.\d+-slim-trixie", c) or "").replace("-slim-trixie", "")),
     ("socket-proxy", "compose.yaml", r"tecnativa/docker-socket-proxy:v([\d.]+)",

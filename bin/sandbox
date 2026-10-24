@@ -4,8 +4,9 @@ set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT"
 
-AGENTS="coder infra admin web assistant cad"
+AGENTS="coder infra admin web assistant cad opencode"
 SERVICES="anthropic github codex-auth.json google.json google-drive.json"
+CODEX_AGENTS="coder infra cad"   # = agents with "codex" in keys/policy.json
 
 usage() {
   cat <<'EOF'
@@ -24,8 +25,8 @@ usage: bin/sandbox <command> [args]
 
  Auth (tokens never enter agent containers)
   login <agent> claude       Claude subscription: one-off `claude setup-token`, token → broker
-  login <agent> codex        ChatGPT subscription: one-off `codex login --device-auth`, tokens → broker,
-                             the agent gets derived fakes
+  login <agent> codex        ChatGPT subscription: one-off `codex login --device-auth`, tokens → broker.
+                             one login shared by coder, infra and cad; they get derived fakes
   login assistant google     Gmail + Calendar OAuth for mailgw (needs secrets/google-client.json)
   login cad google           Google Drive (drive.file scope) for drivegw
   approvals [list|show|approve|deny] [id]
@@ -55,7 +56,7 @@ EOF
 
 die() { echo "sandbox: $*" >&2; exit 1; }
 is_agent() { for a in $AGENTS; do [ "$a" = "$1" ] && return 0; done; return 1; }
-net_of() { case $1 in coder) echo 1;; infra) echo 2;; admin) echo 3;; assistant) echo 4;; web) echo 5;; cad) echo 8;; esac; }
+net_of() { case $1 in coder) echo 1;; infra) echo 2;; admin) echo 3;; assistant) echo 4;; web) echo 5;; cad) echo 8;; opencode) echo 10;; esac; }
 
 cmd_init() {
   umask 077
@@ -88,6 +89,7 @@ cmd_rebuild() {
   docker compose --profile admin build admin
   docker build -t agent-sandbox/mailgw:local mailgw
   docker compose --profile cad build cad
+  docker compose --profile opencode build opencode
 }
 
 cmd_apply() {
@@ -130,7 +132,11 @@ cmd_keys() {
   printf '%-10s' "agent"; for s in $SERVICES; do s=${s%-auth.json}; printf '%-12s' "${s%.json}"; done; echo
   for a in $AGENTS; do
     printf '%-10s' "$a"
-    for s in $SERVICES; do [ -s "secrets/keys/$a/$s" ] && printf '%-12s' "✓" || printf '%-12s' "-"; done
+    for s in $SERVICES; do
+      f=secrets/keys/$a/$s
+      [ "$s" = codex-auth.json ] && case " $CODEX_AGENTS " in *" $a "*) f=secrets/keys/$s ;; esac
+      [ -s "$f" ] && printf '%-12s' "✓" || printf '%-12s' "-"
+    done
     echo
   done
 }
@@ -148,6 +154,14 @@ cmd_key() {
   stty -echo; read -r tok; stty echo; echo
   [ -n "$tok" ] || die "empty token"
   save_secret "$1" "$2" "$tok"
+}
+
+codex_fakes() {  # agent: put derived fakes of the shared codex login into its home
+  # The agent gets derived fakes only; the broker maps them back to the real tokens.
+  python3 -I keys/codexauth.py fake < secrets/keys/codex-auth.json | \
+    docker run --rm -i -u 1000:1000 -v "agent-sandbox_$1_home:/home/agent" --entrypoint sh \
+      agent-sandbox/agent-base:local -c "mkdir -p /home/agent/.codex && cat > /home/agent/.codex/auth.json && chmod 600 /home/agent/.codex/auth.json
+        [ -f /home/agent/.codex/config.toml ] || echo 'cli_auth_credentials_store = \"file\"' > /home/agent/.codex/config.toml"
 }
 
 cmd_login() {
@@ -172,8 +186,7 @@ cmd_login() {
       [ -n "$tok" ] || die "no token"
       save_secret "$agent" anthropic "$tok" ;;
     codex)
-      [ "$agent" = web ] && die "web runs claude only"
-      case $agent in admin) home=/home/admin; uid=1500 ;; *) home=/home/agent; uid=1000 ;; esac
+      case " $CODEX_AGENTS " in *" $agent "*) ;; *) die "codex is for: $CODEX_AGENTS" ;; esac
       tmp=$(mktemp -d -p "${XDG_RUNTIME_DIR:-/tmp}" sbx-codex.XXXXXX)
       trap 'rm -rf "$tmp"' EXIT INT TERM
       echo "Starting a one-off container for 'codex login --device-auth' (only via the vpn)."
@@ -183,15 +196,12 @@ cmd_login() {
         -e CODEX_HOME=/codexhome -v "$tmp:/codexhome" \
         --entrypoint codex agent-sandbox/agent-base:local login --device-auth
       [ -s "$tmp/auth.json" ] || die "login did not produce auth.json"
-      umask 077; mkdir -p "secrets/keys/$agent"
-      cp "$tmp/auth.json" "secrets/keys/$agent/codex-auth.json"
-      # The agent gets derived fakes only; the broker maps them back to the real tokens.
-      python3 -I keys/codexauth.py fake < "$tmp/auth.json" | \
-        docker run --rm -i -u "$uid:$uid" -v "agent-sandbox_${agent}_home:$home" --entrypoint sh \
-          agent-sandbox/agent-base:local -c "mkdir -p $home/.codex && cat > $home/.codex/auth.json && chmod 600 $home/.codex/auth.json
-            [ -f $home/.codex/config.toml ] || echo 'cli_auth_credentials_store = \"file\"' > $home/.codex/config.toml"
+      umask 077; mkdir -p secrets/keys
+      # One login for all codex agents: the broker serializes refreshes of the single-use refresh token.
+      cp "$tmp/auth.json" secrets/keys/codex-auth.json
+      for a in $CODEX_AGENTS; do codex_fakes "$a"; done
       docker compose restart keys >/dev/null
-      echo "codex login saved for $agent (real tokens: secrets/keys/$agent/codex-auth.json, broker restarted)" ;;
+      echo "codex login saved for $CODEX_AGENTS (real tokens: secrets/keys/codex-auth.json, broker restarted)" ;;
     google)
       case $agent in
         assistant) out=google.json; scopes=mail; gw=mailgw ;;

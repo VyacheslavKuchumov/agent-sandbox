@@ -80,12 +80,12 @@ bin/sandbox vless
 
 # 2. Логины (одноразовые контейнеры, только через VPN; токены уходят в брокер)
 bin/sandbox login coder claude
-bin/sandbox login coder codex
-bin/sandbox login infra claude        # и/или codex
+bin/sandbox login coder codex         # один логин Codex на coder, infra и cad
+bin/sandbox login infra claude
 bin/sandbox login admin claude
 bin/sandbox login web claude
 bin/sandbox login assistant claude
-bin/sandbox login cad claude          # и/или codex
+bin/sandbox login cad claude
 bin/sandbox keys                      # таблица: что настроено
 
 # 3. GitHub для coder/infra: fine-grained PAT (Settings → Developer settings →

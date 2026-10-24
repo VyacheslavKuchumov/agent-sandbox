@@ -106,18 +106,21 @@ agent (HTTPS_PROXY=http://10.88.N.3:8080, в env только заглушки, 
     заменена. Брокер маппит подделку → настоящий токен. На `auth.openai.com/oauth/token` он
     подставляет настоящий refresh-токен, новые токены из ответа сохраняет у себя, а агенту
     возвращает новые подделки (`keys/codexauth.py`).
+  - Codex: **один логин на всех** (coder, infra, cad), `secrets/keys/codex-auth.json`. Refresh-токен
+    одноразовый, поэтому брокер обновляет токены под общей блокировкой (`flock`). Агенту с подделками
+    от прежних токенов он отдаёт текущие и не тратит refresh повторно. Агенты могут работать одновременно.
 - Заглушка **никогда** не подменяется в URL или теле запроса (единственное исключение — тело
   запроса обновления токенов Codex, ответ на который переписывается обратно в подделки).
   Иначе агент мог бы попросить брокер записать токен, например, в gist и прочитать его оттуда.
 - Хранилище: `secrets/keys/<agent>/<service>` (`chmod 600`), монтируется **только** в `keys`
   (rw: брокер сохраняет обновлённые токены Codex). `docker inspect` у infra их не покажет.
 - **Свой набор токенов на каждый тип агента** (`keys/policy.json`): coder и infra — anthropic,
-  github, codex; admin и web — только anthropic; cad — anthropic, codex.
+  github, codex; admin и web — только anthropic; cad — anthropic, codex; opencode брокер не использует.
 - У assistant в сети нет vpn, поэтому его брокер ходит наружу через отдельную сеть `sbx-keys`, где sing-box
   пропускает **только** `api.anthropic.com`.
 - Логин (одноразовые контейнеры без монтирований, только через VPN):
-  `bin/sandbox login <agent> claude` (`claude setup-token`) и `bin/sandbox login <agent> codex`
-  (`codex login --device-auth`). Токены сразу уходят в брокер.
+  `bin/sandbox login <agent> claude` (`claude setup-token`) и `bin/sandbox login coder codex`
+  (`codex login --device-auth`, один раз для всех codex-агентов). Токены сразу уходят в брокер.
 
 Что остаётся: пока агент работает, он может **пользоваться** доступом через брокер.
 Унести токен он не может. Поэтому нужны минимальные права у токенов (fine-grained PAT).
@@ -245,6 +248,17 @@ prompt injection**. Значит, защита строится так: даже
 | Google Drive | через шлюз **`drivegw`** (MCP: `drive_upload`, `drive_list`). Токен со scope **`drive.file`**: видны только файлы, созданные самим шлюзом, остальной диск нет. Загрузка только из `/models`, только в папку «Agent Sandbox — 3D models» (+ один уровень подпапок), только модели, картинки и документы, ≤ 200 МБ, ≤ 30 в час. Удаления и скачивания нет |
 | Секреты | ноль. Google-токен лежит в `drivegw`, LLM-токен в брокере |
 
+### Тип 7 — `agent-opencode` (opencode с бесплатными моделями Zen) — ✅ реализован
+
+| | |
+|---|---|
+| Инструменты | `opencode` (`bin/agent opencode`), модель по умолчанию `opencode/deepseek-v4.1-flash-free` |
+| Секреты | никаких: нет брокера, `enabled_providers: ["opencode"]` (`agents/opencode/opencode.json`) |
+| Файлы | `~/Projects`, как у coder |
+| Сеть | своя `sbx-opencode`, прямо в VPN (без брокера), только 80/443 |
+
+Бесплатные модели Zen бесплатны «на ограниченный срок»; часть из них (Big Pickle, MiMo) учится на данных.
+
 ## 5. Взаимодействие через herdr
 
 herdr остаётся **на хосте** (claude/codex с хоста удаляются). Контейнеры работают
@@ -304,11 +318,11 @@ agent-sandbox/
 ├── .env                      # пути и gid хоста (bin/sandbox init обновляет gid)
 ├── secrets/                  # НЕ в git, chmod 600: vless.url, dashboard_secret,
 │                             #   grafana_admin_password, host-wg.json, google-client.json,
-│                             #   keys/<agent>/{anthropic,github,codex-auth.json,google*.json}, keys/ca
+│                             #   keys/<agent>/{anthropic,github,google*.json}, keys/codex-auth.json, keys/ca
 ├── vpn/                      # sing-box + nftables kill switch + zashboard
 ├── keys/                     # брокер секретов (mitmproxy addon, codexauth, policy.json)
 ├── mailgw/                   # шлюзы: mailgw (Gmail/Calendar) и drivegw (Drive), MCP
-├── agents/base|admin|web|assistant|cad/
+├── agents/base|admin|web|assistant|cad|opencode/
 ├── monitor/                  # vector, loki, grafana (+ дашборд «Запросы»)
 ├── host/                     # proxy.pac, nm/ (WG-профиль), systemd/ (watcher), opensnitch/
 ├── proposals/                # предложения agent-admin
@@ -342,7 +356,7 @@ agent-sandbox/
 7. ✅ agent-assistant + mailgw + очередь одобрения (CLI).
 8. ✅ Хост через VPN (PAC + WG/NM + watcher): файлы готовы, ставишь ты (REPORT.md).
 9. ✅ Мониторинг (Vector/Loki/Grafana). OpenSnitch: установщик готов, ставишь ты.
-10. ✅ agent-web, ✅ agent-cad + drivegw.
+10. ✅ agent-web, ✅ agent-cad + drivegw, ✅ agent-opencode.
 11. *(Позже)* ограничения: sing-box по агентам, OpenSnitch по программам хоста.
 
 ## 10. Открытые вопросы

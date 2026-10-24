@@ -13,8 +13,8 @@ probe() { net=$1; shift; docker run --rm --network "$net" --entrypoint sh "$IMG"
 docker inspect sbx-vpn >/dev/null 2>&1 || { echo "sbx-vpn is not running"; exit 1; }
 HOST_IP=$(curl -s --max-time 5 https://ifconfig.me || echo "?")
 
-for n in coder infra admin web cad; do
-  net=sbx-$n; gw=10.88.$(case $n in coder) echo 1;; infra) echo 2;; admin) echo 3;; web) echo 5;; cad) echo 8;; esac).2
+for n in coder infra admin web cad opencode; do
+  net=sbx-$n; gw=10.88.$(case $n in coder) echo 1;; infra) echo 2;; admin) echo 3;; web) echo 5;; cad) echo 8;; opencode) echo 10;; esac).2
   echo "[$n] network $net, proxy $gw:7890"
 
   EXIT_IP=$(docker run --rm --network "$net" --entrypoint sh "$IMG" -c \
@@ -112,6 +112,16 @@ if running sbx-agent-cad; then
   cx 'ls /home/kuchumov/Projects' && bad "cad sees ~/Projects!" || ok "cad: only /models visible"
   cx 'test -e /run/google' && bad "cad sees Google creds!" || ok "cad: Google creds not mounted"
   cx 'curl -s --max-time 5 --noproxy "*" https://1.1.1.1' && bad "cad has a direct route" || ok "cad: direct route blocked"
+fi
+
+if running sbx-agent-opencode; then
+  echo "[opencode] agent container"
+  ox() { docker exec sbx-agent-opencode sh -c "$*" >/dev/null 2>&1; }
+  ox "$tok_scan" && bad "real-looking token inside opencode!" || ok "no real tokens inside opencode"
+  ox 'opencode --version' && ok "opencode runs" || bad "opencode does not run"
+  ox 'env | grep -qiE "anthropic|openai|CLAUDE_CODE"' && bad "opencode has Anthropic/OpenAI env!" || ok "opencode: no Anthropic/OpenAI credentials"
+  ox 'ls /home/kuchumov/agent-sandbox/secrets' && bad "opencode sees secrets!" || ok "opencode: secrets/ not visible"
+  ox 'curl -s --max-time 5 --noproxy "*" https://1.1.1.1' && bad "opencode has a direct route" || ok "opencode: direct route blocked"
 fi
 
 echo "passed: $PASS, failed: $FAIL"

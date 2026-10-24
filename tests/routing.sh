@@ -23,6 +23,8 @@ expect "web: https"                    out      sbx-web    http://10.88.5.2:7890
 expect "web: port 8080 rejected"       rejected sbx-web    http://10.88.5.2:7890 http://iana.org:8080/
 expect "cad: https"                    out      sbx-cad    http://10.88.8.2:7890 https://www.blender.org/
 expect "cad: port 8080 rejected"       rejected sbx-cad    http://10.88.8.2:7890 http://freecad.org:8080/
+expect "opencode: https"               out      sbx-opencode http://10.88.10.2:7890 https://opencode.ai/
+expect "opencode: port 8080 rejected"  rejected sbx-opencode http://10.88.10.2:7890 http://iana.org:8080/
 expect "mailgw: googleapis allowed"    out      sbx-mailgw http://10.88.6.2:7890 https://gmail.googleapis.com/
 expect "mailgw: other domain rejected" rejected sbx-mailgw http://10.88.6.2:7890 https://example.net/
 expect "keys: anthropic allowed"       out      sbx-keys   http://10.88.9.2:7890 https://api.anthropic.com/

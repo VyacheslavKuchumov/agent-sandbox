@@ -3,13 +3,14 @@
 #   bin/agent coder            → claude
 #   bin/agent coder codex      → codex
 #   bin/agent coder shell      → bash
+#   bin/agent opencode         → opencode (free Zen models, no keys)
 #   bin/agent coder claude --resume   (extra args go to the tool)
 set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 . "$ROOT/.env"
 
-[ $# -ge 1 ] || { sed -n '2,6p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
-type=$1; tool=${2:-claude}; [ $# -ge 2 ] && shift 2 || shift 1
+[ $# -ge 1 ] || { sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
+type=$1; [ "$type" = opencode ] && tool=${2:-opencode} || tool=${2:-claude}; [ $# -ge 2 ] && shift 2 || shift 1
 c=sbx-agent-$type
 
 # web: a fresh container per session, removed on exit — nothing an injected page
@@ -27,7 +28,7 @@ fi
 
 # Working dir: coder opens in the pane's folder when it is inside ~/Projects.
 case $type in
-  coder) case $PWD in "$PROJECTS_DIR"|"$PROJECTS_DIR"/*) wd=$PWD ;; *) wd=$PROJECTS_DIR ;; esac ;;
+  coder|opencode) case $PWD in "$PROJECTS_DIR"|"$PROJECTS_DIR"/*) wd=$PWD ;; *) wd=$PROJECTS_DIR ;; esac ;;
   infra) wd=$SANDBOX_DIR ;;
   admin) wd=/proposals ;;
   cad)   wd=/models ;;
@@ -37,6 +38,7 @@ esac
 case $tool in
   claude) HERDR_AGENT=claude exec docker exec -it -w "$wd" "$c" claude "$@" ;;
   codex)  HERDR_AGENT=codex  exec docker exec -it -w "$wd" "$c" codex "$@" ;;
+  opencode) HERDR_AGENT=opencode exec docker exec -it -w "$wd" "$c" opencode "$@" ;;
   shell)  exec docker exec -it -w "$wd" "$c" bash "$@" ;;
-  *) echo "unknown tool: $tool (claude|codex|shell)" >&2; exit 1 ;;
+  *) echo "unknown tool: $tool (claude|codex|opencode|shell)" >&2; exit 1 ;;
 esac
