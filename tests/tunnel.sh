@@ -50,6 +50,10 @@ echo "[tunnel] agents"
 for a in opencode coder infra cad assistant; do
   docker ps -q -f "name=^sbx-agent-$a$" | grep -q . || { warn "$a: not running"; continue; }
   got=$(docker exec "sbx-agent-$a" curl -s --max-time 12 https://api.ipify.org 2>/dev/null)
+  if [ "$a" = assistant ]; then  # no internet by design: broker passes LLM hosts only
+    [ -z "$got" ] && ok "$a: no internet (as designed)" || bad "$a: reached the internet ($got)"
+    continue
+  fi
   if [ -n "$got" ] && [ "$got" != "$direct_ip" ]; then ok "$a: exit IP $got"
   else bad "$a: ${got:-no response} (expected tunnel IP)"; fi
 done
