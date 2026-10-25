@@ -24,6 +24,7 @@ COPY gitconfig /etc/gitconfig
 RUN usermod -l agent -d /home/agent -m node && groupmod -n agent node
 
 ENV HOME=/home/agent \
+    LANG=C.UTF-8 \
     PATH=/home/agent/.local/bin:$PATH \
     NPM_CONFIG_PREFIX=/home/agent/.local \
     NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt \

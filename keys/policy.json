@@ -39,7 +39,8 @@
       "listen": "10.88.5.3",
       "upstream": "http://10.88.5.2:7890",
       "services": [
-        "anthropic"
+        "anthropic",
+        "codex"
       ]
     },
     "infra": {

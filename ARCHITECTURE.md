@@ -115,7 +115,7 @@ agent (HTTPS_PROXY=http://10.88.N.3:8080, в env только заглушки, 
 - Хранилище: `secrets/keys/<agent>/<service>` (`chmod 600`), монтируется **только** в `keys`
   (rw: брокер сохраняет обновлённые токены Codex). `docker inspect` у infra их не покажет.
 - **Свой набор токенов на каждый тип агента** (`keys/policy.json`): coder и infra — anthropic,
-  github, codex; admin и web — только anthropic; cad — anthropic, codex; opencode брокер не использует.
+  github, codex; admin — только anthropic; web и cad — anthropic, codex (Codex в web: полный shell, Claude — без Bash); opencode брокер не использует.
 - У assistant в сети нет vpn, поэтому его брокер ходит наружу через отдельную сеть `sbx-keys`, где sing-box
   пропускает **только** `api.anthropic.com`.
 - Логин (одноразовые контейнеры без монтирований, только через VPN):

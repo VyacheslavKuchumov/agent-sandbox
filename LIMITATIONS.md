@@ -243,6 +243,10 @@ sing-box связываются по времени и адресу назнач
 **5.3. Автообновление агентов.** Обновлять `claude`/`codex` в read-only rootfs нельзя.
 Обновление — пересборка образа (`bin/sandbox apply`) или установка в `$HOME` агента.
 
+**5.3a. Встроенная песочница Codex выключена.** bwrap не может создать namespace при
+`cap_drop: ALL` и seccomp Docker, поэтому `bin/agent` запускает `codex --sandbox danger-full-access`.
+Границей служит сам контейнер (read-only rootfs, нет секретов, сеть только через VPN).
+
 **5.4. Нет GUI и браузера в контейнерах.** Playwright и headless Chrome — только если
 добавить их в образ (и они тоже пойдут через прокси).
 

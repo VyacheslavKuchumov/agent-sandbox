@@ -12,14 +12,31 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 [ $# -ge 1 ] || { sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
 type=$1; [ "$type" = opencode ] && tool=${2:-opencode} || tool=${2:-claude}; [ $# -ge 2 ] && shift 2 || shift 1
 c=sbx-agent-$type
+# The pane's terminal type and a UTF-8 locale; docker exec passes neither.
+TTY_ENV="-e TERM -e COLORTERM -e LANG=C.UTF-8"
 
 # web: a fresh container per session, removed on exit — nothing an injected page
 # does survives. Reports go to ~/agent-sandbox/web-outbox (untrusted).
 if [ "$type" = web ]; then
   "$ROOT/bin/sandbox" up >/dev/null
-  case $tool in claude) cmd=claude; export HERDR_AGENT=claude ;; shell) cmd=bash ;; *) echo "web supports: claude, shell" >&2; exit 1 ;; esac
+  case $tool in
+    claude) set -- claude "$@"; export HERDR_AGENT=claude ;;
+    # Home is tmpfs, so the shared login's derived fakes are seeded per session.
+    codex)  set -- codex --sandbox danger-full-access "$@"; export HERDR_AGENT=codex
+            SBX_CODEX_AUTH=$(python3 -I "$ROOT/keys/codexauth.py" fake < "$ROOT/secrets/keys/codex-auth.json") \
+              || { echo "no codex login — run: bin/sandbox login coder codex" >&2; exit 1; }
+            export SBX_CODEX_AUTH ;;
+    shell)  set -- bash "$@" ;;
+    *) echo "web supports: claude, codex, shell" >&2; exit 1 ;;
+  esac
   exec docker compose -f "$ROOT/compose.yaml" --profile web run --rm --name "sbx-agent-web-$$" \
-    --entrypoint sh web -c 'echo "{\"hasCompletedOnboarding\":true}" > ~/.claude.json; exec "$@"' sh "$cmd" "$@"
+    $TTY_ENV -e SBX_CODEX_AUTH --entrypoint sh web -c '
+      echo "{\"hasCompletedOnboarding\":true}" > ~/.claude.json
+      if [ -n "${SBX_CODEX_AUTH:-}" ]; then
+        mkdir -p ~/.codex && (umask 077; printf %s "$SBX_CODEX_AUTH" > ~/.codex/auth.json)
+        echo "cli_auth_credentials_store = \"file\"" > ~/.codex/config.toml
+      fi
+      unset SBX_CODEX_AUTH; exec "$@"' sh "$@"
 fi
 
 if [ "$(docker inspect -f '{{.State.Running}}' "$c" 2>/dev/null)" != true ]; then
@@ -36,9 +53,11 @@ case $type in
 esac
 
 case $tool in
-  claude) HERDR_AGENT=claude exec docker exec -it -w "$wd" "$c" claude "$@" ;;
-  codex)  HERDR_AGENT=codex  exec docker exec -it -w "$wd" "$c" codex "$@" ;;
-  opencode) HERDR_AGENT=opencode exec docker exec -it -w "$wd" "$c" opencode "$@" ;;
-  shell)  exec docker exec -it -w "$wd" "$c" bash "$@" ;;
+  claude) HERDR_AGENT=claude exec docker exec -it $TTY_ENV -w "$wd" "$c" claude "$@" ;;
+  # Codex's own bwrap sandbox cannot create namespaces under cap_drop ALL +
+  # seccomp; the container itself is the sandbox.
+  codex)  HERDR_AGENT=codex  exec docker exec -it $TTY_ENV -w "$wd" "$c" codex --sandbox danger-full-access "$@" ;;
+  opencode) HERDR_AGENT=opencode exec docker exec -it $TTY_ENV -w "$wd" "$c" opencode "$@" ;;
+  shell)  exec docker exec -it $TTY_ENV -w "$wd" "$c" bash "$@" ;;
   *) echo "unknown tool: $tool (claude|codex|opencode|shell)" >&2; exit 1 ;;
 esac

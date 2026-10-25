@@ -62,7 +62,7 @@ bin/agent <agent> [claude|codex|opencode|shell] [аргументы инстру
 | `admin` | смотрит хост read-only, пишет предложения | `/proposals` | claude, shell |
 | `cad` | FreeCAD / Blender headless | `~/3d-models` | claude, codex, shell |
 | `assistant` | почта и календарь, интернета нет | — | claude |
-| `web` | браузинг и ресёрч, новый контейнер на каждую сессию | — | claude, shell |
+| `web` | браузинг и ресёрч, новый контейнер на каждую сессию | — | claude, codex, shell |
 
 Примеры:
 ```sh

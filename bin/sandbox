@@ -6,7 +6,7 @@ cd "$ROOT"
 
 AGENTS="coder infra admin web assistant cad opencode"
 SERVICES="anthropic github codex-auth.json google.json google-drive.json"
-CODEX_AGENTS="coder infra cad"   # = agents with "codex" in keys/policy.json
+CODEX_AGENTS="coder infra cad"   # = agents with "codex" in keys/policy.json (+ web: fakes seeded per session by bin/agent)
 
 usage() {
   cat <<'EOF'
