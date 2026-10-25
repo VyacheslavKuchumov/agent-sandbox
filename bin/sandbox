@@ -49,6 +49,7 @@ usage: bin/sandbox <command> [args]
 
  Checks
   test                       kill switch, isolation, routing policy, broker and mailgw tests
+  tunnel                     live tunnel check: host route to the server, exit IP, agents
   dashboard                  live connections dashboard (zashboard) URL and secret
   grafana                    history dashboard (Grafana) URL and admin password
 EOF
@@ -208,7 +209,7 @@ cmd_login() {
         cad)       out=google-drive.json; scopes=drive; gw=drivegw ;;
         *) die "google login is for assistant (Gmail+Calendar) or cad (Drive)" ;;
       esac
-      [ -s secrets/google-client.json ] || die "put your Google OAuth *Desktop* client JSON into secrets/google-client.json first (see REPORT.md)"
+      [ -s secrets/google-client.json ] || die "put your Google OAuth *Desktop* client JSON into secrets/google-client.json first (see USAGE.md)"
       umask 077; mkdir -p "secrets/keys/$agent"
       docker run --rm -it --network sbx-mailgw -u "$(id -u):$(id -g)" \
         -e HTTPS_PROXY=http://10.88.6.2:7890 -e HTTP_PROXY=http://10.88.6.2:7890 \
@@ -322,6 +323,7 @@ case "${1:-help}" in
   update)    shift; cmd_update "$@" ;;
   rebuild)   cmd_rebuild ;;
   apply)     cmd_apply ;;
+  tunnel)    tests/tunnel.sh ;;
   test)      rc=0
              tests/killswitch.sh || rc=1
              tests/routing.sh || rc=1

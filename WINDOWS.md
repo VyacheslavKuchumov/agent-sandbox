@@ -94,7 +94,7 @@ bin/sandbox vless                    # the user pastes the vless:// key
 bin/sandbox up coder infra admin monitor
 bin/sandbox test                     # all suites must pass, no ✗
 ```
-Then follow REPORT.md "Your steps": logins via `bin/sandbox login …`. The browser
+Then follow USAGE.md (in Russian): logins via `bin/sandbox login …`. The browser
 runs on Windows. Login links and the Google redirect URL paste work the same way.
 
 Dashboards from the Windows browser (WSL forwards localhost TCP):

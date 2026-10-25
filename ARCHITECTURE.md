@@ -7,7 +7,7 @@ VLESS-VPN с kill switch. **Секретов (токенов, ключей) вн
 
 Статус: ✅ всё из §9 реализовано: агенты coder, infra, admin, web, assistant, cad, брокер (Claude и Codex по
 подписке), шлюзы mailgw и drivegw, мониторинг, подключение хоста. `bin/sandbox test` проходит.
-Сквозная проверка с реальным VLESS-ключом, логинами и Google ещё не делалась: см. REPORT.md.
+Сквозная проверка с реальным VLESS-ключом, логинами и Google ещё не делалась.
 Развёртывание на Windows/WSL: [WINDOWS.md](WINDOWS.md). Известные ограничения — в [LIMITATIONS.md](LIMITATIONS.md).
 
 ---
@@ -125,7 +125,7 @@ agent (HTTPS_PROXY=http://10.88.N.3:8080, в env только заглушки, 
 Что остаётся: пока агент работает, он может **пользоваться** доступом через брокер.
 Унести токен он не может. Поэтому нужны минимальные права у токенов (fine-grained PAT).
 
-⚠️ С настоящими аккаунтами ещё не проверено (REPORT.md). Логика подмены покрыта
+⚠️ С настоящими аккаунтами ещё не проверено. Логика подмены покрыта
 `tests/broker.sh`.
 
 ---
@@ -250,7 +250,7 @@ prompt injection**. Значит, защита строится так: даже
 
 ### Тип 7 — `agent-opencode` (opencode с бесплатными моделями Zen) — ✅ реализован
 
-| | |
+| Слой | Как |
 |---|---|
 | Инструменты | `opencode` (`bin/agent opencode`), модель по умолчанию `opencode/deepseek-v4.1-flash-free` |
 | Секреты | никаких: нет брокера, `enabled_providers: ["opencode"]` (`agents/opencode/opencode.json`) |
@@ -313,7 +313,7 @@ host-watch ─┘
 
 ```
 agent-sandbox/
-├── ARCHITECTURE.md LIMITATIONS.md REPORT.md WINDOWS.md
+├── ARCHITECTURE.md LIMITATIONS.md USAGE.md WINDOWS.md
 ├── compose.yaml              # все сервисы; агенты и мониторинг в профилях
 ├── .env                      # пути и gid хоста (bin/sandbox init обновляет gid)
 ├── secrets/                  # НЕ в git, chmod 600: vless.url, dashboard_secret,
@@ -352,9 +352,9 @@ agent-sandbox/
 3. ✅ agent-coder + `bin/agent` для herdr.
 4. ✅ agent-infra + socket-proxy (GET) + `bin/sandbox apply`.
 5. ✅ agent-admin (read-only хост + `proposals/`).
-6. ⏳ Удаление claude/codex с хоста: делаешь ты после проверки логинов (REPORT.md).
+6. ⏳ Удаление claude/codex с хоста: делаешь ты после проверки логинов.
 7. ✅ agent-assistant + mailgw + очередь одобрения (CLI).
-8. ✅ Хост через VPN (PAC + WG/NM + watcher): файлы готовы, ставишь ты (REPORT.md).
+8. ✅ Хост через VPN (PAC + WG/NM + watcher): файлы готовы, ставишь ты (USAGE.md).
 9. ✅ Мониторинг (Vector/Loki/Grafana). OpenSnitch: установщик готов, ставишь ты.
 10. ✅ agent-web, ✅ agent-cad + drivegw, ✅ agent-opencode.
 11. *(Позже)* ограничения: sing-box по агентам, OpenSnitch по программам хоста.
