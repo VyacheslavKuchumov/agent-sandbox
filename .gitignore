@@ -4,3 +4,5 @@ agents/base/sbx-ca.crt
 web-outbox/*
 !web-outbox/README.md
 REPORT*.md
+desktop/node_modules/
+desktop/artifacts/

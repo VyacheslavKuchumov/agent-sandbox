@@ -1,5 +1,9 @@
 # Как запускать агентов
 
+Графическая панель: [Agent Sandbox Desktop](desktop/README.md). Один раз выполните
+`cd desktop && npm ci`, затем из корня репозитория — `bin/sandbox gui`.
+Для знакомства без воздействия на контейнеры: `bin/sandbox gui --demo`.
+
 Все команды выполняются из `~/agent-sandbox`. Подробности устройства описаны в `ARCHITECTURE.md`.
 
 ## 1. Один раз: подготовка

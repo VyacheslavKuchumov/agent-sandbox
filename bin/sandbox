@@ -22,6 +22,7 @@ usage: bin/sandbox <command> [args]
   restart [service...]       restart services (default: vpn keys)
   status                     containers, health, which keys are configured
   logs [vpn|keys|<agent>]    follow logs (vpn = connections, keys = API calls)
+  gui [--demo]              open the Electron control center (first: cd desktop && npm ci)
 
  Auth (tokens never enter agent containers)
   login <agent> claude       Claude subscription: one-off `claude setup-token`, token → broker
@@ -316,6 +317,9 @@ case "${1:-help}" in
   status)    cmd_status ;;
   logs)      case ${2:-vpn} in vpn) docker logs -f --tail 50 sbx-vpn;; keys) docker logs -f --tail 50 sbx-keys;;
                *) docker logs -f --tail 50 "sbx-agent-$2";; esac ;;
+  gui)       shift; cd "$ROOT/desktop"
+             [ -x node_modules/.bin/electron ] || die "install GUI dependencies first: cd desktop && npm ci"
+             exec node_modules/.bin/electron . "$@" ;;
   login)     shift; cmd_login "$@" ;;
   key)       shift; cmd_key "$@" ;;
   key-rm)    shift; [ $# -eq 2 ] || die "usage: key-rm <agent> <service>"; rm -f "secrets/keys/$1/$2"; docker compose restart keys >/dev/null; echo "removed" ;;
